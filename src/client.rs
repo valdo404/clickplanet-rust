@@ -1,4 +1,4 @@
-use futures::stream::{BoxStream, SplitStream};
+use futures::stream::{BoxStream, SplitSink, SplitStream};
 use prost::Message;
 use tokio_tungstenite::{
     connect_async,
@@ -15,6 +15,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 use serde::Deserialize;
 use serde_json::json;
+use tokio_tungstenite::tungstenite::handshake::client::Response;
 
 pub mod clicks {
     include!(concat!(env!("OUT_DIR"), "/clicks.v1.rs"));
@@ -143,8 +144,8 @@ impl Client {
             .body(())
             .unwrap();
 
-        let (ws_stream, _) = connect_async(request).await?;
-        let (_, read) = ws_stream.split();
+        let (ws_stream, _): (WebSocketStream<MaybeTlsStream<TcpStream>>, Response) = connect_async(request).await?;
+        let (_, read): (SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, tokio_tungstenite::tungstenite::Message>, SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>) = ws_stream.split();
         Ok(read)
     }
 
