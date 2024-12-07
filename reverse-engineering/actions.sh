@@ -42,4 +42,5 @@ protobuf_inspector < output.proto
 websocat -v --socks5 "127.0.0.1:9050" -H "Origin: https://clickplanet.lol" -H "Host: clickplanet.lol"   -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36" \
   -H "Accept-Language: en-US,en;q=0.9" \
   -H "Accept-Encoding: gzip, deflate, br" \
-  -H "Connection: keep-alive" --socks5-user-pass : wss://clickplanet.lol/ws/listen
+  -H "Connection: keep-alive" --socks5-user-pass : \
+  wss://clickplanet.lol/ws/listen

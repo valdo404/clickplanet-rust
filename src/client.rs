@@ -30,7 +30,7 @@ pub struct Client {
     base_url: String,
 }
 
-const CLIENT_NAME: &'static str = "clickplanet client owned by valdo404";
+pub const CLIENT_NAME: &'static str = "clickplanet client owned by valdo404";
 
 impl Client {
     pub fn new(base_url: &str) -> Self {
