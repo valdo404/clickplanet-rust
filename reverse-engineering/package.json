@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "acorn": "^8.14.0",
+    "escodegen": "^2.1.0",
+    "esprima": "^4.0.1"
+  }
+}

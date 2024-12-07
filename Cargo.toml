@@ -1,0 +1,16 @@
+[package]
+name = "clickplanet-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+prost = "0.12"
+tonic = "0.10"
+tokio = { version = "1.0", features = ["full"] }
+tokio-tungstenite = { version = "0.20", features = ["native-tls"] }
+futures = "0.3"
+url = "2.5"
+native-tls = "0.2"
+
+[build-dependencies]
+prost-build = "0.12"

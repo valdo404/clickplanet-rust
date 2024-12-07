@@ -1,0 +1,26 @@
+syntax = "proto3";
+package clicks.v1;
+
+message ClickRequest {
+    int32 tile_id = 1;
+    string country_id = 2;
+}
+
+message BatchRequest {
+    int32 start_tile_id = 1;
+    int32 end_tile_id = 2;
+}
+
+message OwnershipState {
+    map<string, string> bindings = 1;
+}
+
+message UpdateNotification {
+    int32 tile_id = 1;
+    string country_id = 2;
+    string previous_country_id = 3;
+}
+
+message MapDensityResponse {
+    int32 density = 1;
+}
