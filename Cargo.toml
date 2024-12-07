@@ -2,6 +2,17 @@
 name = "clickplanet-client"
 version = "0.1.0"
 edition = "2021"
+description = "A Rust client for the ClickPlanet game"
+license = "MIT"
+repository = "https://github.com/valdo404/clickplanet-client"
+
+[lib]
+name = "clickplanet_client"
+path = "src/lib.rs"
+
+[[bin]]
+name = "clickplanet-robot"
+path = "src/main.rs"
 
 [dependencies]
 prost = "0.12"
