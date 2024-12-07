@@ -1,8 +1,7 @@
 mod client;
 
-use prost::Message;
-use tokio_tungstenite::connect_async;
 use futures::StreamExt;
+use prost::Message;
 
 
 #[tokio::main]
