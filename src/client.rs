@@ -1,4 +1,3 @@
-use crate::clicks::{ClickRequest, OwnershipState};
 use futures::stream::{BoxStream, SplitStream};
 use prost::Message;
 use tokio_tungstenite::{
@@ -12,14 +11,25 @@ use crate::client;
 use futures::{Stream, StreamExt, TryStreamExt};
 use tokio::net::TcpStream;
 use url::Url;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+use serde::Deserialize;
+use serde_json::json;
 
 pub mod clicks {
     include!(concat!(env!("OUT_DIR"), "/clicks.v1.rs"));
 }
 
+#[derive(Deserialize)]
+struct OwnershipResponse {
+    data: String,  // base64 encoded protobuf
+}
+
 pub struct Client {
     base_url: String,
 }
+
+const CLIENT_NAME: &'static str = "clickplanet client owned by valdo404";
 
 impl Client {
     pub fn new(base_url: &str) -> Self {
@@ -29,7 +39,7 @@ impl Client {
     }
 
     pub async fn click_tile(&self, tile_id: i32, country_id: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let request = ClickRequest {
+        let request = client::clicks::ClickRequest {
             tile_id,
             country_id: country_id.to_string(),
         };
@@ -37,9 +47,74 @@ impl Client {
         Ok(())
     }
 
-    pub async fn get_ownerships(&self) -> Result<OwnershipState, Box<dyn std::error::Error>> {
-        // Implement HTTP GET request here
-        unimplemented!()
+    pub async fn get_ownerships_by_batch(
+        &self,
+        start_tile_id: i32,
+        end_tile_id: i32,
+    ) -> Result<client::clicks::OwnershipState, Box<dyn std::error::Error>> {
+        let client = reqwest::Client::new();
+
+        // Create BatchRequest
+        let batch_request = client::clicks::BatchRequest {
+            start_tile_id,
+            end_tile_id,
+        };
+
+        // Serialize BatchRequest to Protobuf bytes
+        let mut proto_bytes = Vec::new();
+        batch_request.encode(&mut proto_bytes)?;
+
+        let payload = json!({
+            "data": proto_bytes,
+        });
+
+        // Send request
+        let response = client
+            .post(format!("https://{}/api/ownerships-by-batch", self.base_url))
+            .header("User-Agent", CLIENT_NAME)
+            .header("Content-Type", "application/json")
+            .header("Origin", format!("https://{}", self.base_url))
+            .header("Referer", format!("https://{}/", self.base_url))
+            .json(&payload)
+            .send()
+            .await?;
+
+        // Parse JSON response
+        let response_json: serde_json::Value = response.json().await?;
+        let encoded_data = response_json["data"]
+            .as_str()
+            .ok_or("Invalid or missing data field in response")?;
+
+        // Decode base64
+        let proto_bytes = STANDARD.decode(encoded_data)?;
+
+        // Decode OwnershipState Protobuf
+        let ownership_state = client::clicks::OwnershipState::decode(&proto_bytes[..])?;
+
+        Ok(ownership_state)
+    }
+
+    pub async fn get_ownerships(&self) -> Result<client::clicks::OwnershipState, Box<dyn std::error::Error>> {
+        let client = reqwest::Client::new();
+
+        let response = client
+            .get(format!("https://{}/api/ownerships", self.base_url))
+            .header("User-Agent", CLIENT_NAME)
+            .header("Origin", format!("https://{}", self.base_url))
+            .header("Referer", format!("https://{}/", self.base_url))
+            .send()
+            .await?;
+
+        // Parse JSON response
+        let ownership_response: OwnershipResponse = response.json().await?;
+
+        // Decode base64
+        let proto_bytes = STANDARD.decode(ownership_response.data)?;
+
+        // Decode protobuf
+        let ownership_state = client::clicks::OwnershipState::decode(&proto_bytes[..])?;
+
+        Ok(ownership_state)
     }
 
     fn generate_websocket_key() -> String {
@@ -58,7 +133,7 @@ impl Client {
 
         let request = Request::builder()
             .uri(url.as_str())
-            .header("User-Agent", "Rust Client")
+            .header("User-Agent", CLIENT_NAME)
             .header("Origin", format!("https://{}", self.base_url))
             .header("Host", self.base_url.clone())  // Clone here
             .header("Connection", "Upgrade")

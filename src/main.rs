@@ -4,15 +4,26 @@ use prost::Message;
 use tokio_tungstenite::connect_async;
 use futures::StreamExt;
 
-pub mod clicks {
-    include!(concat!(env!("OUT_DIR"), "/clicks.v1.rs"));
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = client::Client::new("clickplanet.lol");
 
-    // Get the stream of updates
+    println!("Getting ownerships:");
+
+    let ownerships = client.get_ownerships().await?;
+
+    println!("Initial ownerships:");
+
+    for ownership in ownerships.ownerships {
+        println!(
+            "Tile {} owned by {}",
+            ownership.tile_id, ownership.country_id
+        );
+    }
+
+    println!("\nConnecting to WebSocket for live updates...");
+
     let mut updates = client.listen_for_updates().await?;
 
     println!("Connected to WebSocket, waiting for updates...");

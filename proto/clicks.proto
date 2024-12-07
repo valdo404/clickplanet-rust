@@ -11,8 +11,13 @@ message BatchRequest {
     int32 end_tile_id = 2;
 }
 
+message Ownership {
+    uint32 tile_id = 1;
+    string country_id = 2;
+}
+
 message OwnershipState {
-    map<string, string> bindings = 1;
+    repeated Ownership ownerships = 1;
 }
 
 message UpdateNotification {
