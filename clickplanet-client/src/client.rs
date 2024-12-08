@@ -66,7 +66,7 @@ impl ClickPlanetRestClient {
     }
 
 
-    pub async fn click_tile(&self, tile_id: i32, country_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn click_tile(&self, tile_id: i32, country_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let request = clicks::ClickRequest {
             tile_id,
             country_id: country_id.to_string(),

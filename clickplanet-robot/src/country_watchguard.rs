@@ -1,13 +1,19 @@
 use crate::geolookup::CountryTilesMap;
 use clickplanet_client::TileCount;
 use futures_util::stream::BoxStream;
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use rand::Rng;
 use std::collections::HashSet;
 use std::error::Error;
+use std::future;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::sleep;
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::ThreadPool;
+use tokio::runtime::Runtime;
+use tokio::time::{sleep, timeout};
+use clickplanet_proto::clicks::{OwnershipState, UpdateNotification};
 
 #[derive(Clone)]
 pub struct CountryWatchguard {
@@ -40,27 +46,59 @@ impl CountryWatchguard {
         }
     }
 
-    async fn monitor_updates(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut updates: BoxStream<'_, clickplanet_proto::clicks::UpdateNotification> = self.client.listen_for_updates().await?;
 
-        while let Some(update) = updates.next().await {
-            if self.country_tiles.contains(&(update.tile_id as u32)) &&
-                update.country_id != self.wanted_country {
-                println!(
-                    "Detected unauthorized change on tile {}: {} -> {}. Reclaiming...",
-                    update.tile_id, update.previous_country_id, update.country_id
-                );
+    async fn monitor_updates(self) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let updates: BoxStream<'_, clickplanet_proto::clicks::UpdateNotification> = self.client.listen_for_updates().await?;
+        let country_tiles = self.country_tiles.clone();
+        let wanted_country = self.wanted_country.clone();
+        let this = self.clone();
 
-                self.wait_with_jitter().await;
 
-                match self.client.click_tile(update.tile_id, &self.wanted_country).await {
-                    Ok(_) => println!("Successfully reclaimed tile {}", update.tile_id),
-                    Err(e) => eprintln!("Failed to reclaim tile {}: {}", update.tile_id, e),
+        updates
+            .filter({
+                let wanted_country = wanted_country.clone();
+                move |update| future::ready(
+                    country_tiles.contains(&(update.tile_id as u32)) &&
+                        update.country_id != wanted_country
+                )
+            })
+            .map(move |update| {
+                let this = this.clone();
+                async move {
+                    println!(
+                        "Detected unauthorized change on tile {}: {} -> {}. Reclaiming...",
+                        update.tile_id, update.previous_country_id, update.country_id
+                    );
+
+                    if let Err(e) = this.claim_tile(&(update.tile_id as u32)).await {
+                        eprintln!("Error processing tile: {}", e);
+                    }
                 }
-            }
-        }
+            })
+            .buffer_unordered(4)
+            .for_each(|_| future::ready(()))
+            .await;
 
         Ok(())
+    }
+
+    async fn click_on_tile(
+        wanted_country: &String,
+        this: CountryWatchguard,
+        update: UpdateNotification
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        this.wait_with_jitter().await;
+
+        match this.client.click_tile(update.tile_id, wanted_country).await {
+            Ok(_) => {
+                println!("Successfully reclaimed tile {}", update.tile_id);
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("Failed to reclaim tile {}: {}", update.tile_id, e);
+                Err(e.into())
+            }
+        }
     }
 
     async fn periodic_claim_check(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -68,7 +106,7 @@ impl CountryWatchguard {
             println!("Performing periodic claim check...");
             self.claim_all_tiles().await?;
 
-            sleep(Duration::from_secs(300)).await;
+            sleep(Duration::from_secs(120)).await;
         }
     }
 
@@ -123,10 +161,55 @@ impl CountryWatchguard {
 
     async fn claim_all_tiles(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let arc: Arc<dyn TileCount + Send + Sync> = self.tile_coordinates_map.clone();
+        let ownerships: OwnershipState = self.client.get_ownerships(&(arc)).await?;
 
-        let ownerships = self.client.get_ownerships(&(arc)).await?;
+        let tiles_to_claim: HashSet<_> = self.find_tile_to_claim(ownerships);
+        println!("Need to claim {} tiles", tiles_to_claim.len());
 
-        let tiles_to_claim: HashSet<_> = self.country_tiles
+        futures::stream::iter(
+            tiles_to_claim.into_par_iter()
+                .map(|tile_id| async move {
+                    if let Err(e) = self.claim_tile(&tile_id).await {
+                        eprintln!("Failed to claim tile {}: {}", tile_id, e);
+                    }
+                })
+                .collect::<Vec<_>>()
+        )
+            .buffer_unordered(4)
+            .collect::<Vec<_>>()
+            .await;
+
+        Ok(())
+    }
+
+    async fn claim_tile(&self, tile_id: &u32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        println!("Claiming tile {}", tile_id);
+
+        match timeout(
+            Duration::from_secs(5),
+            self.client.click_tile(*tile_id as i32, &self.wanted_country)
+        ).await {
+            Ok(result) => match result {
+                Ok(_) => {
+                    println!("Claimed tile {}", tile_id);
+                }
+                Err(e) => {
+                    eprintln!("Failed to claim tile {}: {}", tile_id, e);
+                    return Err(e);
+                }
+            },
+            Err(_) => {
+                eprintln!("Timeout while claiming tile {}", tile_id);
+                return Err("Operation timed out after 5 seconds".into());
+            }
+        }
+
+        self.wait_with_jitter().await;
+        Ok(())
+    }
+
+    fn find_tile_to_claim(&self, ownerships: OwnershipState) -> HashSet<&u32> {
+        self.country_tiles
             .iter()
             .filter(|&&tile_id| {
                 ownerships.ownerships
@@ -134,19 +217,6 @@ impl CountryWatchguard {
                     .find(|o| o.tile_id == tile_id)
                     .map_or(true, |o| o.country_id != self.target_country)
             })
-            .collect();
-
-        println!("Need to claim {} tiles", tiles_to_claim.len());
-
-        for &tile_id in tiles_to_claim.iter() {
-            match self.client.click_tile(*tile_id as i32, &self.target_country).await {
-                Ok(_) => println!("Claimed tile {}", tile_id),
-                Err(e) => eprintln!("Failed to claim tile {}: {}", tile_id, e),
-            }
-
-            self.wait_with_jitter().await;
-        }
-
-        Ok(())
+            .collect()
     }
 }
