@@ -3,6 +3,8 @@ use geojson::{GeoJson, Value};
 use rstar::{PointDistance, RTree, RTreeObject, AABB};
 use std::collections::HashMap;
 use std::error::Error;
+use std::fs;
+use std::path::Path;
 use rayon::prelude::*;
 use crate::model::TileVertex;
 
@@ -26,12 +28,59 @@ impl CountryTilesMap {
         Self::default()
     }
 
-    pub fn build(
+    pub fn load_or_build(
+        geo_lookup: &GeoLookup,
+        tile_coords: &TileCoordinatesMap,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        let tile_to_countries_path = Path::new("tile_to_countries.json");
+        let country_to_tiles_path = Path::new("country_to_tiles.json");
+
+        if tile_to_countries_path.exists() && country_to_tiles_path.exists() {
+            // Load from existing JSON files
+            let tile_to_country: HashMap<u32, String> = serde_json::from_str(
+                &fs::read_to_string(tile_to_countries_path)?
+            )?;
+
+            let country_tiles: HashMap<String, Vec<u32>> = serde_json::from_str(
+                &fs::read_to_string(country_to_tiles_path)?
+            )?;
+
+            // Build unassigned tiles list
+            let mut unassigned_tiles: Vec<u32> = tile_coords.tiles.keys()
+                .filter(|&&tile_id| !tile_to_country.contains_key(&tile_id))
+                .copied()
+                .collect();
+            unassigned_tiles.sort_unstable();
+
+            Ok(Self {
+                tile_to_country,
+                country_tiles,
+                unassigned_tiles,
+            })
+        } else {
+            // Build new mapping
+            let mut mapping = Self::build(geo_lookup, tile_coords)?;
+
+            // Save to JSON files
+            fs::write(
+                tile_to_countries_path,
+                serde_json::to_string(&mapping.tile_to_country)?
+            )?;
+
+            fs::write(
+                country_to_tiles_path,
+                serde_json::to_string(&mapping.country_tiles)?
+            )?;
+
+            Ok(mapping)
+        }
+    }
+
+    fn build(
         geo_lookup: &GeoLookup,
         tile_coords: &TileCoordinatesMap,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let chunk_size = 1000;
-
         let mut map = Self::new();
 
         // Get and sort tile IDs

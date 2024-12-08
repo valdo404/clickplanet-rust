@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let index_coordinates: TileCoordinatesMap = coordinates.into();
     let geolookup: GeoLookup = GeoLookup::from_file(&args.geojson_file)?;
 
-    let country_tile_map = CountryTilesMap::build(&geolookup, &index_coordinates)?;
+    let country_tile_map = CountryTilesMap::load_or_build(&geolookup, &index_coordinates)?;
     let client = ClickPlanetRestClient::new(&args.click_planet_host);
 
     println!("Initializing watchguard for {} -> {}", args.target_country, args.wanted_country);
