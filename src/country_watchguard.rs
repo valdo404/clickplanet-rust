@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
+use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use rand::Rng;
 use tokio::task;
@@ -43,7 +44,7 @@ impl CountryWatchguard {
     }
 
     async fn monitor_updates(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut updates = self.client.listen_for_updates().await?;
+        let mut updates: BoxStream<'_, client::clicks::UpdateNotification> = self.client.listen_for_updates().await?;
 
         while let Some(update) = updates.next().await {
             if self.country_tiles.contains(&(update.tile_id as u32)) &&
