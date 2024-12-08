@@ -1,7 +1,6 @@
 mod client;
 
 use futures::StreamExt;
-use prost::Message;
 
 
 #[tokio::main]

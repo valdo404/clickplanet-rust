@@ -44,7 +44,26 @@ impl Client {
             tile_id,
             country_id: country_id.to_string(),
         };
-        // Implement HTTP POST request here
+
+        let mut proto_bytes = Vec::new();
+        request.encode(&mut proto_bytes)?;
+
+        let client = reqwest::Client::new();
+
+        let response = client
+            .post(format!("https://{}/api/click", self.base_url))
+            .header("User-Agent", CLIENT_NAME)
+            .header("Content-Type", "application/json")
+            .header("Origin", format!("https://{}", self.base_url))
+            .header("Referer", format!("https://{}/", self.base_url))
+            .json(&json!({
+            "data": proto_bytes,
+        }))
+            .send()
+            .await?;
+
+        response.error_for_status()?;
+
         Ok(())
     }
 
