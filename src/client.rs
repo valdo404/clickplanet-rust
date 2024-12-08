@@ -1,3 +1,4 @@
+use std::error::Error;
 use futures::stream::{BoxStream, SplitSink, SplitStream};
 use prost::Message;
 use tokio_tungstenite::{
@@ -16,6 +17,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::Deserialize;
 use serde_json::json;
 use tokio_tungstenite::tungstenite::handshake::client::Response;
+use client::clicks::OwnershipState;
+use crate::coordinates::TileCoordinatesMap;
 
 pub mod clicks {
     include!(concat!(env!("OUT_DIR"), "/clicks.v1.rs"));
@@ -74,13 +77,11 @@ impl Client {
     ) -> Result<client::clicks::OwnershipState, Box<dyn std::error::Error>> {
         let client = reqwest::Client::new();
 
-        // Create BatchRequest
         let batch_request = client::clicks::BatchRequest {
             start_tile_id,
             end_tile_id,
         };
 
-        // Serialize BatchRequest to Protobuf bytes
         let mut proto_bytes = Vec::new();
         batch_request.encode(&mut proto_bytes)?;
 
@@ -88,7 +89,6 @@ impl Client {
             "data": proto_bytes,
         });
 
-        // Send request
         let response = client
             .post(format!("https://{}/api/ownerships-by-batch", self.base_url))
             .header("User-Agent", CLIENT_NAME)
@@ -99,42 +99,70 @@ impl Client {
             .send()
             .await?;
 
-        // Parse JSON response
         let response_json: serde_json::Value = response.json().await?;
         let encoded_data = response_json["data"]
             .as_str()
             .ok_or("Invalid or missing data field in response")?;
 
-        // Decode base64
         let proto_bytes = STANDARD.decode(encoded_data)?;
 
-        // Decode OwnershipState Protobuf
         let ownership_state = client::clicks::OwnershipState::decode(&proto_bytes[..])?;
 
         Ok(ownership_state)
     }
 
-    pub async fn get_ownerships(&self) -> Result<client::clicks::OwnershipState, Box<dyn std::error::Error>> {
-        let client = reqwest::Client::new();
+    pub async fn get_ownerships(
+        &self,
+        index_coordinates: &TileCoordinatesMap,
+    ) -> Result<client::clicks::OwnershipState, Box<dyn std::error::Error>> {
+        const BATCH_SIZE: i32 = 10000;
 
-        let response = client
-            .get(format!("https://{}/api/ownerships", self.base_url))
-            .header("User-Agent", CLIENT_NAME)
-            .header("Origin", format!("https://{}", self.base_url))
-            .header("Referer", format!("https://{}/", self.base_url))
-            .send()
-            .await?;
+        let max_tile_id = (index_coordinates.len() as i32) - 1;
 
-        // Parse JSON response
-        let ownership_response: OwnershipResponse = response.json().await?;
+        let mut final_state = client::clicks::OwnershipState {
+            ownerships: Vec::new(),
+        };
 
-        // Decode base64
-        let proto_bytes = STANDARD.decode(ownership_response.data)?;
+        let mut start_tile_id = 1;
+        while start_tile_id <= max_tile_id {
+            let end_tile_id = (start_tile_id + BATCH_SIZE).min(max_tile_id);
 
-        // Decode protobuf
-        let ownership_state = client::clicks::OwnershipState::decode(&proto_bytes[..])?;
+            let result: Result<OwnershipState, Box<dyn Error>> = self.get_ownerships_by_batch(start_tile_id, end_tile_id).await;
 
-        Ok(ownership_state)
+            match result {
+                Ok(batch_state) => {
+                    final_state.ownerships.extend(batch_state.ownerships);
+                },
+                Err(e) => {
+                    eprintln!("Error fetching batch {} to {}: {:?}", start_tile_id, end_tile_id, e);
+
+                    // More detailed error inspection
+                    if let Some(reqwest_err) = e.downcast_ref::<reqwest::Error>() {
+                        if let Some(status) = reqwest_err.status() {
+                            eprintln!("HTTP Status: {}", status);
+                            if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                                eprintln!("Rate limit hit, waiting before retry...");
+                                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                                continue; // Retry this batch
+                            }
+                        }
+                        if reqwest_err.is_timeout() {
+                            eprintln!("Request timed out");
+                        }
+                        if reqwest_err.is_connect() {
+                            eprintln!("Connection error");
+                        }
+                    }
+
+                    // Return the error after logging
+                    return Err(e);
+                }
+            }
+
+            start_tile_id += BATCH_SIZE;
+        }
+
+        Ok(final_state)
     }
 
     fn generate_websocket_key() -> String {

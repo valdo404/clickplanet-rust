@@ -7,6 +7,7 @@
 //! - Query ownership state
 
 mod client;
+mod coordinates;
 
 pub use client::Client;
 pub use crate::client::clicks;  // Re-export the generated protobuf types

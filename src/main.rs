@@ -1,15 +1,24 @@
 mod client;
+mod coordinates;
 
 use futures::StreamExt;
-
+use crate::coordinates::{read_coordinates_from_file, CoordinatesData, TileCoordinatesMap};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = client::Client::new("clickplanet.lol");
 
+    let coordinates: CoordinatesData = read_coordinates_from_file()?;
+
+    let index_coordinates:TileCoordinatesMap = coordinates.into();
+
+    println!("{:?}", index_coordinates.get_tile(0));
+    println!("{:?}", index_coordinates.get_tile(1));
+    println!("{:?}", index_coordinates.get_tile(index_coordinates.len() as i32 - 1));
+
     println!("Getting ownerships:");
 
-    let ownerships = client.get_ownerships().await?;
+    let ownerships = client.get_ownerships(&index_coordinates).await?;
 
     println!("Initial ownerships:");
 
