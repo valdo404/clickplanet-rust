@@ -5,7 +5,8 @@ use std::time::Duration;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use rand::Rng;
-use tokio::task;
+use tokio::{runtime, task};
+use tokio::runtime::Runtime;
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use crate::client;
@@ -75,13 +76,14 @@ impl CountryWatchguard {
         }
     }
 
-    pub async fn run(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn run(self, handle: tokio::runtime::Handle) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!(
             "Starting watchguard for target country: {} / wanted_country: {}",
             self.target_country,
             self.wanted_country
         );
         println!("Monitoring {} tiles", self.country_tiles.len());
+
 
         // Clone self for the second task
         let self_clone = Self {
@@ -92,29 +94,30 @@ impl CountryWatchguard {
             wanted_country: self.wanted_country.clone(),
         };
 
-        let monitor: JoinHandle<Result<(), Box<dyn Error + Send + Sync>>> = task::spawn(async move {
+        let monitor = handle.spawn(async move {
             self.monitor_updates().await
         });
-        let checker: JoinHandle<Result<(), Box<dyn Error + Send + Sync>>> = task::spawn(async move {
+
+        let checker = handle.spawn(async move {
             self_clone.periodic_claim_check().await
         });
 
         tokio::select! {
-        result = monitor => {
-            println!("Monitor task completed: {:?}", result);
-            return match result {
-                Ok(inner_result) => inner_result,
-                Err(join_error) => Err(Box::new(join_error) as Box<dyn Error + Send + Sync>)?
+            result = monitor => {
+                println!("Monitor task completed: {:?}", result);
+                return match result {
+                    Ok(inner_result) => inner_result,
+                    Err(join_error) => Err(Box::new(join_error) as Box<dyn Error + Send + Sync>)?
+                }
+            }
+            result = checker => {
+                println!("Checker task completed: {:?}", result);
+                return match result {
+                    Ok(inner_result) => inner_result,
+                    Err(join_error) => Err(Box::new(join_error) as Box<dyn Error + Send + Sync>)?
+                }
             }
         }
-        result = checker => {
-            println!("Checker task completed: {:?}", result);
-            return match result {
-                Ok(inner_result) => inner_result,
-                Err(join_error) => Err(Box::new(join_error) as Box<dyn Error + Send + Sync>)?
-            }
-        }
-    }
     }
 
     async fn wait_with_jitter(&self) {

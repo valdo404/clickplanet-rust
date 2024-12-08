@@ -38,15 +38,17 @@ struct Args {
 }
 
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Args::parse();
 
+    let runtime_handle = tokio::runtime::Handle::current();
+    let coordinates = read_coordinates_from_file(&args.coordinates_file)?;
+    let index_coordinates = coordinates.into();
+    let geolookup = GeoLookup::from_file(&args.geojson_file)?;
+
+    let country_tile_map = CountryTilesMap::build(&geolookup, &index_coordinates)?;
     let client = client::ClickPlanetRestClient::new(&args.click_planet_host);
-    let coordinates: CoordinatesData = read_coordinates_from_file(&args.coordinates_file)?;
-    let index_coordinates: TileCoordinatesMap = coordinates.into();
-    let geolookup: GeoLookup = GeoLookup::from_file(&args.geojson_file)?;
-    let country_tile_map: CountryTilesMap = CountryTilesMap::build(&geolookup, &index_coordinates)?;
 
     println!("Initializing watchguard for {} -> {}", args.target_country, args.wanted_country);
 
@@ -58,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         &args.wanted_country.to_lowercase()
     );
 
-    watchguard.run().await?;
+    watchguard.run(runtime_handle).await?;
 
     Ok(())
 }
