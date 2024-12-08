@@ -64,11 +64,14 @@ impl CountryWatchguard {
             })
             .map(move |update| {
                 let this = this.clone();
+
+                println!(
+                    "Detected unauthorized change on tile {}: {} -> {}. Reclaiming...",
+                    update.tile_id, update.previous_country_id, update.country_id
+                );
+
                 async move {
-                    println!(
-                        "Detected unauthorized change on tile {}: {} -> {}. Reclaiming...",
-                        update.tile_id, update.previous_country_id, update.country_id
-                    );
+
 
                     if let Err(e) = this.claim_tile(&(update.tile_id as u32)).await {
                         eprintln!("Error processing tile: {}", e);
@@ -169,6 +172,8 @@ impl CountryWatchguard {
         futures::stream::iter(
             tiles_to_claim.into_par_iter()
                 .map(|tile_id| async move {
+                    println!("Claiming tile {}", tile_id);
+
                     if let Err(e) = self.claim_tile(&tile_id).await {
                         eprintln!("Failed to claim tile {}: {}", tile_id, e);
                     }
@@ -183,7 +188,6 @@ impl CountryWatchguard {
     }
 
     async fn claim_tile(&self, tile_id: &u32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        println!("Claiming tile {}", tile_id);
 
         match timeout(
             Duration::from_secs(5),
