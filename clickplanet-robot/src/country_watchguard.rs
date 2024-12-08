@@ -71,8 +71,6 @@ impl CountryWatchguard {
                 );
 
                 async move {
-
-
                     if let Err(e) = this.claim_tile(&(update.tile_id as u32)).await {
                         eprintln!("Error processing tile: {}", e);
                     }
@@ -85,29 +83,12 @@ impl CountryWatchguard {
         Ok(())
     }
 
-    async fn click_on_tile(
-        wanted_country: &String,
-        this: CountryWatchguard,
-        update: UpdateNotification
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        this.wait_with_jitter().await;
-
-        match this.client.click_tile(update.tile_id, wanted_country).await {
-            Ok(_) => {
-                println!("Successfully reclaimed tile {}", update.tile_id);
-                Ok(())
-            }
-            Err(e) => {
-                eprintln!("Failed to reclaim tile {}: {}", update.tile_id, e);
-                Err(e.into())
-            }
-        }
-    }
-
     async fn periodic_claim_check(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         loop {
             println!("Performing periodic claim check...");
             self.claim_all_tiles().await?;
+            println!();
+            println!("Checker task completed");
 
             sleep(Duration::from_secs(120)).await;
         }
@@ -115,7 +96,7 @@ impl CountryWatchguard {
 
     pub async fn run(self, handle: tokio::runtime::Handle) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         println!(
-            "Starting watchguard for target country: {} / wanted_country: {}",
+            "Starting watchguard for target country: {} / wanted country: {}",
             self.target_country,
             self.wanted_country
         );
@@ -148,7 +129,6 @@ impl CountryWatchguard {
                 }
             }
             result = checker => {
-                println!("Checker task completed: {:?}", result);
                 return match result {
                     Ok(inner_result) => inner_result,
                     Err(join_error) => Err(Box::new(join_error) as Box<dyn Error + Send + Sync>)?
@@ -219,7 +199,7 @@ impl CountryWatchguard {
                 ownerships.ownerships
                     .iter()
                     .find(|o| o.tile_id == tile_id)
-                    .map_or(true, |o| o.country_id != self.target_country)
+                    .map_or(true, |o| o.country_id != self.wanted_country)
             })
             .collect()
     }
