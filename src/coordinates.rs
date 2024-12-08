@@ -95,8 +95,8 @@ impl From<CoordinatesData> for TileCoordinatesMap {
     }
 }
 
-pub fn read_coordinates_from_file() -> Result<CoordinatesData, Box<dyn std::error::Error + Send + Sync>> {
-    let json_str = std::fs::read_to_string("coordinates.json")?;
+pub fn read_coordinates_from_file(file_name: &String) -> Result<CoordinatesData, Box<dyn std::error::Error + Send + Sync>> {
+    let json_str = std::fs::read_to_string(file_name)?;
 
     load_coordinates(&json_str)
 }

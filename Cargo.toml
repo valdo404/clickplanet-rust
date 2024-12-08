@@ -39,6 +39,7 @@ webpki-roots = "0.26.7"
 rstar = "0.12.2"
 geojson = "0.24.1"
 rayon = "1.10.0"
+clap = { version = "4.5.23", features = ["derive"] }
 
 [dependencies.rustls]
 features = ["std"]
