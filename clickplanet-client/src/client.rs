@@ -1,6 +1,7 @@
 use futures::stream::{BoxStream, SplitStream};
 use prost::Message;
 use std::error::Error;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio_tungstenite::{
     connect_async,
@@ -9,10 +10,10 @@ use tokio_tungstenite::{
     WebSocketStream,
 };
 
-use crate::client;
-use crate::coordinates::TileCoordinatesMap;
 use base64::{engine::general_purpose::STANDARD, DecodeError, Engine as _};
-use client::clicks::OwnershipState;
+use clickplanet_proto::clicks;
+use clickplanet_proto::clicks::OwnershipState;
+use clickplanet_proto::clicks::*;
 use futures::StreamExt;
 use rand::Rng;
 use serde::Deserialize;
@@ -23,8 +24,12 @@ use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 use url::Url;
 
-pub mod clicks {
-    include!(concat!(env!("OUT_DIR"), "/clicks.v1.rs"));
+pub trait TileCount {
+    fn len(&self) -> usize;
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 #[derive(Clone)]
@@ -62,7 +67,7 @@ impl ClickPlanetRestClient {
 
 
     pub async fn click_tile(&self, tile_id: i32, country_id: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let request = client::clicks::ClickRequest {
+        let request = clicks::ClickRequest {
             tile_id,
             country_id: country_id.to_string(),
         };
@@ -105,10 +110,10 @@ impl ClickPlanetRestClient {
         &self,
         start_tile_id: i32,
         end_tile_id: i32,
-    ) -> Result<client::clicks::OwnershipState, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<clicks::OwnershipState, Box<dyn std::error::Error + Send + Sync>> {
         let client = reqwest::Client::new();
 
-        let batch_request = client::clicks::BatchRequest {
+        let batch_request = clicks::BatchRequest {
             start_tile_id,
             end_tile_id,
         };
@@ -150,7 +155,7 @@ impl ClickPlanetRestClient {
 
         let proto_bytes: Vec<u8> = result.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
-        let ownership_state = client::clicks::OwnershipState::decode(&proto_bytes[..])
+        let ownership_state = clicks::OwnershipState::decode(&proto_bytes[..])
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
         Ok(ownership_state)
@@ -158,13 +163,13 @@ impl ClickPlanetRestClient {
 
     pub async fn get_ownerships(
         &self,
-        index_coordinates: &TileCoordinatesMap,
-    ) -> Result<client::clicks::OwnershipState, Box<dyn std::error::Error + Send + Sync>> {
+        index_coordinates: &Arc<dyn TileCount + Send + Sync>,
+    ) -> Result<clicks::OwnershipState, Box<dyn std::error::Error + Send + Sync>> {
         const BATCH_SIZE: i32 = 10000;
 
         let max_tile_id = (index_coordinates.len() as i32) - 1;
 
-        let mut final_state = client::clicks::OwnershipState {
+        let mut final_state = clicks::OwnershipState {
             ownerships: Vec::new(),
         };
 
@@ -249,11 +254,9 @@ impl ClickPlanetRestClient {
         Ok(read)
     }
 
-    pub async fn listen_for_updates(&self) -> Result<BoxStream<'_, client::clicks::UpdateNotification>, Box<dyn std::error::Error + Send + Sync + 'static>> {
-        let client = self.clone();  // Clone to create owned data
-
+    pub async fn listen_for_updates(&self) -> Result<BoxStream<'_, clicks::UpdateNotification>, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let stream = Box::pin(futures::stream::unfold((), move |_| {
-            let client = client;  // No need to clone here
+            let client = self;  // No need to clone here
             async move {
                 loop {
                     match Self::create_update_stream(client).await {
@@ -271,7 +274,7 @@ impl ClickPlanetRestClient {
         Ok(stream.boxed())
     }
 
-    async fn create_update_stream<'a>(client: &'a ClickPlanetRestClient) -> Result<BoxStream<'a, client::clicks::UpdateNotification>, Box<dyn std::error::Error + Send + Sync + 'a>> {
+    async fn create_update_stream<'a>(client: &'a ClickPlanetRestClient) -> Result<BoxStream<'a, clicks::UpdateNotification>, Box<dyn std::error::Error + Send + Sync + 'a>> {
         // Rest of the implementation remains the same
         let config = WebSocketConfig::default();
         let retry_strategy = ExponentialBackoff::from_millis(config.initial_interval.as_millis() as u64)
@@ -286,7 +289,7 @@ impl ClickPlanetRestClient {
             .filter_map(|message| async move {
                 match message {
                     Ok(msg) => {
-                        match client::clicks::UpdateNotification::decode(msg.into_data().as_slice()) {
+                        match clicks::UpdateNotification::decode(msg.into_data().as_slice()) {
                             Ok(notification) => Some(notification),
                             Err(e) => {
                                 eprintln!("Error decoding message: {}", e);

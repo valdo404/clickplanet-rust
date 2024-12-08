@@ -1,22 +1,18 @@
+use crate::geolookup::CountryTilesMap;
+use clickplanet_client::TileCount;
+use futures_util::stream::BoxStream;
+use futures_util::StreamExt;
+use rand::Rng;
 use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
 use std::time::Duration;
-use futures_util::stream::BoxStream;
-use futures_util::StreamExt;
-use rand::Rng;
-use tokio::{runtime, task};
-use tokio::runtime::Runtime;
-use tokio::task::JoinHandle;
 use tokio::time::sleep;
-use crate::client;
-use crate::coordinates::TileCoordinatesMap;
-use crate::geolookup::CountryTilesMap;
 
 #[derive(Clone)]
 pub struct CountryWatchguard {
-    client: Arc<client::ClickPlanetRestClient>,
-    tile_coordinates_map: Arc<TileCoordinatesMap>,
+    client: Arc<clickplanet_client::ClickPlanetRestClient>,
+    tile_coordinates_map: Arc<dyn TileCount + Send + Sync>,
     country_tiles: HashSet<u32>,
     target_country: String,
     wanted_country: String,
@@ -24,9 +20,9 @@ pub struct CountryWatchguard {
 
 impl CountryWatchguard {
     pub fn new(
-        client: Arc<client::ClickPlanetRestClient>,
+        client: Arc<clickplanet_client::ClickPlanetRestClient>,
         country_tile_map: Arc<CountryTilesMap>,
-        tile_coordinates_map: Arc<TileCoordinatesMap>,
+        tile_coordinates_map: Arc<dyn TileCount + Send + Sync>,
         target_country: &str,
         wanted_country: &str,
     ) -> Self {
@@ -45,7 +41,7 @@ impl CountryWatchguard {
     }
 
     async fn monitor_updates(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut updates: BoxStream<'_, client::clicks::UpdateNotification> = self.client.listen_for_updates().await?;
+        let mut updates: BoxStream<'_, clickplanet_proto::clicks::UpdateNotification> = self.client.listen_for_updates().await?;
 
         while let Some(update) = updates.next().await {
             if self.country_tiles.contains(&(update.tile_id as u32)) &&
@@ -126,7 +122,9 @@ impl CountryWatchguard {
     }
 
     async fn claim_all_tiles(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let ownerships = self.client.get_ownerships(&self.tile_coordinates_map).await?;
+        let arc: Arc<dyn TileCount + Send + Sync> = self.tile_coordinates_map.clone();
+
+        let ownerships = self.client.get_ownerships(&(arc)).await?;
 
         let tiles_to_claim: HashSet<_> = self.country_tiles
             .iter()

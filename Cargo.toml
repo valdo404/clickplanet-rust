@@ -1,32 +1,25 @@
-[package]
-name = "clickplanet-client"
-version = "0.1.0"
-edition = "2021"
-description = "A Rust client for the ClickPlanet game"
-license = "MIT"
-repository = "https://github.com/valdo404/clickplanet-client"
+[workspace]
+members = [
+    "clickplanet-client",
+    "clickplanet-server",
+    "clickplanet-proto",
+    "clickplanet-robot",
 
-[lib]
-name = "clickplanet_client"
-path = "src/lib.rs"
+]
 
-[[bin]]
-name = "clickplanet_robot"
-path = "src/main.rs"
 
-[dependencies]
-prost = "0.12"
-tonic = "0.10"
-tokio = { version = "1.0", features = ["full"] }
-
+[workspace.dependencies]
+prost = "0.13.4"
+tonic = "0.12.3"
+tokio = { version = "1.42.0", features = ["full"] }
 tokio-tungstenite = { version = "0.24.0", features = ["__rustls-tls", "rustls-tls-native-roots","connect"] }
-futures = "0.3"
-url = "2.5"
+futures = "0.3.31"
+url = "2.5.4"
 native-tls = "0.2"
 base64 = "0.21.7"
 rand = "0.8.5"
 reqwest = { version = "0.12.9", features = ["json"] }
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0.215", features = ["derive"] }
 serde_json = "1.0.133"
 futures-util = "0.3.31"
 webpki-roots = "0.26.7"
@@ -35,10 +28,3 @@ geojson = "0.24.1"
 rayon = "1.10.0"
 clap = { version = "4.5.23", features = ["derive"] }
 tokio-retry = "0.3.0"
-
-[dependencies.rustls]
-features = ["std"]
-version = "0.23.19"
-
-[build-dependencies]
-prost-build = "0.12"

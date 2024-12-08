@@ -61,13 +61,15 @@ pub struct TileCoordinatesMap {
     pub tiles: HashMap<u32, TileVertex>,
 }
 
+impl clickplanet_client::TileCount for TileCoordinatesMap {
+    fn len(&self) -> usize {
+        self.tiles.len()
+    }
+}
+
 impl TileCoordinatesMap {
     pub fn get_tile(&self, tile_id: u32) -> Option<&TileVertex> {
         self.tiles.get(&tile_id)
-    }
-
-    pub fn len(&self) -> usize {
-        self.tiles.len()
     }
 
     pub fn is_empty(&self) -> bool {

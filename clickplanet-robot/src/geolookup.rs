@@ -1,10 +1,10 @@
 use crate::coordinates::TileCoordinatesMap;
-use crate::model::TileVertex;
 use geojson::{GeoJson, Value};
 use rstar::{PointDistance, RTree, RTreeObject, AABB};
 use std::collections::HashMap;
 use std::error::Error;
 use rayon::prelude::*;
+use crate::model::TileVertex;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CountryPolygon {
