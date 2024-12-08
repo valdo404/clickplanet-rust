@@ -8,7 +8,7 @@ use tokio_tungstenite::{
 };
 
 use crate::client;
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::StreamExt;
 use tokio::net::TcpStream;
 use url::Url;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
