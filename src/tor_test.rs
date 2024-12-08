@@ -1,7 +1,7 @@
 use arti_client::{DataStream, TorClient, TorClientConfig};
 use tor_rtcompat::PreferredRuntime;
 
-use crate::client::CLIENT_NAME;
+use crate::client::{generate_websocket_key, CLIENT_NAME};
 use futures::StreamExt;
 use rustls::client::danger::ServerCertVerifier;
 use std::error::Error;
@@ -49,16 +49,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
-}
-
-fn generate_websocket_key() -> String {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
-    use rand::Rng;
-
-    let mut rng = rand::thread_rng();
-    let mut key = [0u8; 16];
-    rng.fill(&mut key);
-    STANDARD.encode(key)
 }
 
 async fn connect_over_tor(

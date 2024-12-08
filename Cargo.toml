@@ -36,6 +36,9 @@ arti-client = "0.25.0"
 tor-rtcompat = "0.25.0"
 futures-util = "0.3.31"
 webpki-roots = "0.26.7"
+rstar = "0.12.2"
+geojson = "0.24.1"
+rayon = "1.10.0"
 
 [dependencies.rustls]
 features = ["std"]

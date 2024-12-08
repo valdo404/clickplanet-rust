@@ -1,48 +1,33 @@
 mod client;
 mod coordinates;
+mod model;
+mod geolookup;
+mod country_watchguard;
 
-use futures::StreamExt;
+use std::error::Error;
 use crate::coordinates::{read_coordinates_from_file, CoordinatesData, TileCoordinatesMap};
+use crate::country_watchguard::CountryWatchguard;
+use crate::geolookup::{CountryTilesMap, GeoLookup};
+use futures::StreamExt;
+use std::sync::Arc;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = client::Client::new("clickplanet.lol");
-
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let client = client::ClickPlanetRestClient::new("clickplanet.lol");
     let coordinates: CoordinatesData = read_coordinates_from_file()?;
+    let index_coordinates: TileCoordinatesMap = coordinates.into();
+    let geolookup: GeoLookup = GeoLookup::from_default_location()?;
+    let country_tile_map: CountryTilesMap = CountryTilesMap::build(&geolookup, &index_coordinates)?;
 
-    let index_coordinates:TileCoordinatesMap = coordinates.into();
+    let watchguard: CountryWatchguard = CountryWatchguard::new(
+        Arc::new(client),
+        Arc::new(country_tile_map),
+        Arc::new(index_coordinates),
+        "fr",
+        "fr"
+    );
 
-    println!("{:?}", index_coordinates.get_tile(0));
-    println!("{:?}", index_coordinates.get_tile(1));
-    println!("{:?}", index_coordinates.get_tile(index_coordinates.len() as i32 - 1));
-
-    println!("Getting ownerships:");
-
-    let ownerships = client.get_ownerships(&index_coordinates).await?;
-
-    println!("Initial ownerships:");
-
-    for ownership in ownerships.ownerships {
-        println!(
-            "Tile {} owned by {}",
-            ownership.tile_id, ownership.country_id
-        );
-    }
-
-    println!("\nConnecting to WebSocket for live updates...");
-
-    let mut updates = client.listen_for_updates().await?;
-
-    println!("Connected to WebSocket, waiting for updates...");
-
-    // Process the stream
-    while let Some(update) = updates.next().await {
-        println!("Update: tile={}, from={}, to={}",
-                 update.tile_id,
-                 update.previous_country_id,
-                 update.country_id
-        );
-    }
+    watchguard.run().await?;
 
     Ok(())
 }

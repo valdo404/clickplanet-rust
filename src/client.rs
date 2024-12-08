@@ -12,7 +12,7 @@ use crate::client;
 use futures::StreamExt;
 use tokio::net::TcpStream;
 use url::Url;
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::{Engine as _, engine::general_purpose::STANDARD, DecodeError};
 
 use serde::Deserialize;
 use serde_json::json;
@@ -29,13 +29,13 @@ struct OwnershipResponse {
     data: String,  // base64 encoded protobuf
 }
 
-pub struct Client {
+pub struct ClickPlanetRestClient {
     base_url: String,
 }
 
 pub const CLIENT_NAME: &'static str = "clickplanet client owned by valdo404";
 
-impl Client {
+impl ClickPlanetRestClient {
     pub fn new(base_url: &str) -> Self {
         Self {
             base_url: base_url.to_string(),
@@ -74,7 +74,7 @@ impl Client {
         &self,
         start_tile_id: i32,
         end_tile_id: i32,
-    ) -> Result<client::clicks::OwnershipState, Box<dyn std::error::Error>> {
+    ) -> Result<client::clicks::OwnershipState, Box<dyn std::error::Error + Send + Sync>> {
         let client = reqwest::Client::new();
 
         let batch_request = client::clicks::BatchRequest {
@@ -83,7 +83,9 @@ impl Client {
         };
 
         let mut proto_bytes = Vec::new();
-        batch_request.encode(&mut proto_bytes)?;
+        batch_request.encode(&mut proto_bytes)
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+            ?;
 
         let payload = json!({
             "data": proto_bytes,
@@ -97,16 +99,36 @@ impl Client {
             .header("Referer", format!("https://{}/", self.base_url))
             .json(&payload)
             .send()
-            .await?;
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
-        let response_json: serde_json::Value = response.json().await?;
+        let response_json: serde_json::Value = response.json().await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
         let encoded_data = response_json["data"]
             .as_str()
-            .ok_or("Invalid or missing data field in response")?;
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "Invalid or missing data field in response"
+                )
+            });
 
-        let proto_bytes = STANDARD.decode(encoded_data)?;
+        let str_result = response_json["data"]
+            .as_str()
+            .ok_or_else(|| std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Invalid or missing data field in response"
+            ))
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
-        let ownership_state = client::clicks::OwnershipState::decode(&proto_bytes[..])?;
+        let result: Result<Vec<u8>, DecodeError> = STANDARD.decode(
+            str_result
+        );
+
+        let proto_bytes: Vec<u8> = result.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
+        let ownership_state = client::clicks::OwnershipState::decode(&proto_bytes[..])
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
         Ok(ownership_state)
     }
@@ -114,7 +136,7 @@ impl Client {
     pub async fn get_ownerships(
         &self,
         index_coordinates: &TileCoordinatesMap,
-    ) -> Result<client::clicks::OwnershipState, Box<dyn std::error::Error>> {
+    ) -> Result<client::clicks::OwnershipState, Box<dyn std::error::Error + Send + Sync>> {
         const BATCH_SIZE: i32 = 10000;
 
         let max_tile_id = (index_coordinates.len() as i32) - 1;
@@ -127,7 +149,7 @@ impl Client {
         while start_tile_id <= max_tile_id {
             let end_tile_id = (start_tile_id + BATCH_SIZE).min(max_tile_id);
 
-            let result: Result<OwnershipState, Box<dyn Error>> = self.get_ownerships_by_batch(start_tile_id, end_tile_id).await;
+            let result: Result<OwnershipState, Box<dyn Error + Send + Sync>> = self.get_ownerships_by_batch(start_tile_id, end_tile_id).await;
 
             match result {
                 Ok(batch_state) => {
@@ -136,7 +158,6 @@ impl Client {
                 Err(e) => {
                     eprintln!("Error fetching batch {} to {}: {:?}", start_tile_id, end_tile_id, e);
 
-                    // More detailed error inspection
                     if let Some(reqwest_err) = e.downcast_ref::<reqwest::Error>() {
                         if let Some(status) = reqwest_err.status() {
                             eprintln!("HTTP Status: {}", status);
@@ -154,7 +175,6 @@ impl Client {
                         }
                     }
 
-                    // Return the error after logging
                     return Err(e);
                 }
             }
@@ -165,19 +185,11 @@ impl Client {
         Ok(final_state)
     }
 
-    fn generate_websocket_key() -> String {
-        use base64::{Engine as _, engine::general_purpose::STANDARD};
-        use rand::Rng;
 
-        let mut rng = rand::thread_rng();
-        let mut key = [0u8; 16];
-        rng.fill(&mut key);
-        STANDARD.encode(key)
-    }
 
-    pub async fn connect_websocket(&self) -> Result<SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>, Box<dyn std::error::Error>> {
+    pub async fn connect_websocket(&self) -> Result<SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>, Box<dyn std::error::Error + Send + Sync>> {
         let ws_url = format!("wss://{}/ws/listen", self.base_url);
-        let url = Url::parse(&ws_url)?;
+        let url = Url::parse(&ws_url).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
         let request = Request::builder()
             .uri(url.as_str())
@@ -187,16 +199,17 @@ impl Client {
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
             .header("Sec-WebSocket-Version", "13")
-            .header("Sec-WebSocket-Key", Self::generate_websocket_key())
+            .header("Sec-WebSocket-Key", generate_websocket_key())
             .body(())
             .unwrap();
 
-        let (ws_stream, _): (WebSocketStream<MaybeTlsStream<TcpStream>>, Response) = connect_async(request).await?;
+        let (ws_stream, _): (WebSocketStream<MaybeTlsStream<TcpStream>>, Response) = connect_async(request).await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
         let (_, read): (SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, tokio_tungstenite::tungstenite::Message>, SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>) = ws_stream.split();
         Ok(read)
     }
 
-    pub async fn listen_for_updates(&self) -> Result<BoxStream<'static, client::clicks::UpdateNotification>, Box<dyn std::error::Error>> {
+    pub async fn listen_for_updates(&self) -> Result<BoxStream<'static, client::clicks::UpdateNotification>, Box<dyn std::error::Error + Send + Sync>> {
         let read = self.connect_websocket().await?;
 
         let update_stream = read
@@ -212,4 +225,14 @@ impl Client {
 
         Ok(update_stream)
     }
+}
+
+pub fn generate_websocket_key() -> String {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use rand::Rng;
+
+    let mut rng = rand::thread_rng();
+    let mut key = [0u8; 16];
+    rng.fill(&mut key);
+    STANDARD.encode(key)
 }

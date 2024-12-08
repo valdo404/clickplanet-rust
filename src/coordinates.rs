@@ -1,6 +1,8 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use crate::model::TileVertex;
+
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CoordinatesData {
@@ -11,7 +13,6 @@ pub struct CoordinatesData {
 
     length_cache: Cell<Option<usize>>,
 }
-
 
 impl CoordinatesData {
     pub fn get_position_triplets(&self) -> impl Iterator<Item = &[f64]> {
@@ -54,41 +55,14 @@ impl CoordinatesData {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct Position3D {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct UVCoordinate {
-    pub u: f64,
-    pub v: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TileVertex {
-    pub position: Position3D,
-    pub uv: UVCoordinate,
-}
-
-impl TileVertex {
-    pub fn new(x: f64, y: f64, z: f64, u: f64, v: f64) -> Self {
-        Self {
-            position: Position3D { x, y, z },
-            uv: UVCoordinate { u, v },
-        }
-    }
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TileCoordinatesMap {
-    pub tiles: HashMap<i32, TileVertex>,
+    pub tiles: HashMap<u32, TileVertex>,
 }
 
 impl TileCoordinatesMap {
-    pub fn get_tile(&self, tile_id: i32) -> Option<&TileVertex> {
+    pub fn get_tile(&self, tile_id: u32) -> Option<&TileVertex> {
         self.tiles.get(&tile_id)
     }
 
@@ -110,23 +84,24 @@ impl From<CoordinatesData> for TileCoordinatesMap {
         // Zip together positions and uvs, enumerate to create tile IDs
         for (tile_id, (pos, uv)) in positions.zip(uvs).enumerate() {
             let vertex = TileVertex::new(
+                tile_id,
                 pos[0], pos[1], pos[2],  // xyz position
                 uv[0], uv[1],           // uv coordinates
             );
-            tiles.insert(tile_id as i32, vertex);
+            tiles.insert(tile_id as u32, vertex);
         }
 
         TileCoordinatesMap { tiles }
     }
 }
 
-pub fn read_coordinates_from_file() -> Result<CoordinatesData, Box<dyn std::error::Error>> {
+pub fn read_coordinates_from_file() -> Result<CoordinatesData, Box<dyn std::error::Error + Send + Sync>> {
     let json_str = std::fs::read_to_string("coordinates.json")?;
 
     load_coordinates(&json_str)
 }
 
-pub fn load_coordinates(json_str: &str) -> Result<CoordinatesData, Box<dyn std::error::Error>> {
+pub fn load_coordinates(json_str: &str) -> Result<CoordinatesData, Box<dyn std::error::Error + Send + Sync>> {
     let coords: CoordinatesData = serde_json::from_str(json_str)?;
     coords.validate()?;
     Ok(coords)
@@ -165,8 +140,13 @@ mod tests {
         }"#;
 
         let coords = load_coordinates(json).unwrap();
-        assert_eq!(coords.length, 1);
+        assert_eq!(coords.length(), 1);
         assert_eq!(coords.positions.len(), 3);
         assert_eq!(coords.uvs.len(), 2);
+
+        let map: TileCoordinatesMap = coords.into();
+
+        assert_eq!(map.len(), 1);
+        assert_eq!(map.tiles.len(), 1);
     }
 }
