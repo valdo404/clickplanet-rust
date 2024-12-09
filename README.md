@@ -1,10 +1,19 @@
-# ClickPlanet Client
+# ClickPlanet Project
 
 A Rust client implementation for interacting with [ClickPlanet](https://clickplanet.lol), a multiplayer geographic clicking game.
 
 ## Protocol
 
 The game uses Protocol Buffers for all communication
+
+## Features
+
+- A country safeguard robot.
+- A REST / Websocket client
+ - TODO fix the websocket client (seems broken)
+ - TODO Rely on http pools. Fix tokio concurrency
+- A server (TODO), using CQRS architecture.
+ - Expected Stack: hyper / axium / redis for cold state recovery / Actix for in fast in memory states / capnproto or grpc for write / read synchronisation / redstar for offline analysis. 
 
 ## Building
 
