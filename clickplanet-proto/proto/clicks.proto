@@ -1,9 +1,21 @@
 syntax = "proto3";
 package clicks.v1;
 
+message Click {
+    int32 tile_id = 1;
+    string country_id = 2;
+    uint64 timestamp_ns = 3;
+    string click_id = 4;
+}
+
 message ClickRequest {
     int32 tile_id = 1;
     string country_id = 2;
+}
+
+message ClickResponse {
+    uint64 timestamp_ns = 1;
+    string click_id = 2;
 }
 
 message BatchRequest {

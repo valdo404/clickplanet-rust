@@ -1,6 +1,20 @@
+
 [package]
 name = "clickplanet-server"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+clickplanet-proto = { path = "../clickplanet-proto" }
+axum = "0.7.9"
+tokio = { workspace = true, features = ["full"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+async-nats = { version = "0.29.0" }
+prost = { workspace = true }
+bytes = "1.9.0"
+uuid = { version = "1.11.0", features = ["v4"] }
+thiserror = { workspace = true }
+
+[build-dependencies]
+prost-build = "0.11"
