@@ -6,28 +6,19 @@ description = "Robot implementation for ClickPlanet game"
 license = "MIT"
 
 [dependencies]
-clickplanet-client = { path = "../clickplanet-client" }
 clickplanet-proto = { path = "../clickplanet-proto" }
-
-# Core async runtime and utilities
+clickplanet-client = { path = "../clickplanet-client" }
 tokio.workspace = true
 futures.workspace = true
 futures-util.workspace = true
-
-# CLI argument parsing
 clap.workspace = true
 
-# Error handling and async traits
-async-trait = "0.1"
-
-# Serialization/Deserialization
 serde.workspace = true
 serde_json.workspace = true
 geojson.workspace = true
 rayon.workspace = true
 rstar.workspace = true
 
-# Error handling
 anyhow = "1.0"
 thiserror = "1.0"
 rand = "0.9.0-beta.1"
