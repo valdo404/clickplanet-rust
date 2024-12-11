@@ -128,6 +128,44 @@ impl RedisTileStateBuilder {
         Ok(messages)
     }
 
+    pub async fn get_leaderboard(
+        &self,
+        top_n: usize,
+    ) -> Result<Vec<(String, f64)>, PollingConsumerError> {
+        let leaderboard_key = format!("{}leaderboard", REDIS_KEY_PREFIX);
+        let mut redis_conn = self.redis_pool.get().await?;
+
+        let scores: Vec<(String, f64)> = cmd("ZREVRANGE")
+            .arg(&leaderboard_key)
+            .arg(0)
+            .arg((top_n - 1) as isize)
+            .arg("WITHSCORES")
+            .query_async(&mut redis_conn)
+            .await?;
+
+        Ok(scores)
+    }
+
+    pub async fn get_tiles(
+        &self,
+        tile_id: i32,
+    ) -> Result<(Option<String>, Option<u64>), PollingConsumerError> {
+        let tile_key = format!("{}{}:country", REDIS_KEY_PREFIX, tile_id);
+        let timestamp_key = format!("{}{}:timestamp", REDIS_KEY_PREFIX, tile_id);
+
+        let mut redis_conn = self.redis_pool.get().await?;
+
+        // Fetch both keys using a Redis pipeline
+        let (country_id, timestamp): (Option<String>, Option<u64>) = deadpool_redis::redis::pipe()
+            .atomic()
+            .cmd("GET").arg(&tile_key) // Get country ID
+            .cmd("GET").arg(&timestamp_key) // Get last modification timestamp
+            .query_async(&mut redis_conn)
+            .await?;
+
+        Ok((country_id, timestamp))
+    }
+
     #[instrument(
         name = "process_message",
         skip(self, message),
@@ -163,6 +201,7 @@ impl RedisTileStateBuilder {
 
         let tile_key = format!("{}{}:country", REDIS_KEY_PREFIX, tile_id);
         let timestamp_key = format!("{}{}:timestamp", REDIS_KEY_PREFIX, tile_id);
+        let leaderboard_key = format!("leaderboard");
 
         let current_timestamp: Option<u64> = cmd("GET")
             .arg(&timestamp_key)
@@ -187,6 +226,7 @@ impl RedisTileStateBuilder {
             .atomic()
             .cmd("SET").arg(&tile_key).arg(&click.country_id)
             .cmd("SET").arg(&timestamp_key).arg(click.timestamp_ns)
+            .cmd("ZINCRBY").arg(&leaderboard_key).arg(1).arg(&click.country_id.to_string()) // Increment leaderboard score
             .query_async(&mut redis_conn)
             .await?;
 
