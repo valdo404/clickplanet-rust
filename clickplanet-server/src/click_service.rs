@@ -59,17 +59,17 @@ impl ClickService {
         Ok(Self { jetstream })
     }
 
-    #[instrument(
-        name = "publish_click",
-        skip(self, request),
-        fields(
-        tile_id = tracing::field::Empty,
-        country = tracing::field::Empty,
-        click_timestamp = tracing::field::Empty,
-        click_id = tracing::field::Empty,
-        publish_time = tracing::field::Empty,
-        )
-    )]
+    // #[instrument(
+    //     name = "publish_click",
+    //     skip(self, request),
+    //     fields(
+    //     tile_id = tracing::field::Empty,
+    //     country = tracing::field::Empty,
+    //     click_timestamp = tracing::field::Empty,
+    //     click_id = tracing::field::Empty,
+    //     publish_time = tracing::field::Empty,
+    //     )
+    // )]
     pub async fn process_click(
         &self,
         request: clickplanet_proto::clicks::ClickRequest,
