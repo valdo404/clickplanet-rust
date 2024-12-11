@@ -69,13 +69,11 @@ async fn handle_click(
         .process_click(click_request)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    info!("Response !");  // Debug log
 
     let mut response_bytes = Vec::new();
     response
         .encode(&mut response_bytes)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    info!("Finished !");  // Debug log
 
     Ok((
         [(axum::http::header::CONTENT_TYPE, "application/x-protobuf")],

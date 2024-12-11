@@ -2,13 +2,18 @@ use async_nats::jetstream::consumer::{Config, Consumer};
 use async_nats::jetstream::stream::Stream;
 use async_nats::jetstream::Context;
 use async_nats::{jetstream, ConnectError};
-use deadpool_redis::{redis::cmd, Config as RedisConfig, PoolError, Runtime};
+use clickplanet_proto::clicks::{Click, ClickResponse};
+use deadpool_redis::redis::{AsyncCommands, AsyncIter, RedisError};
+use deadpool_redis::{redis, redis::cmd, Config as RedisConfig, Connection, PoolError, Runtime};
+use futures::stream::{self};
 use futures::{future, StreamExt};
 use prost::Message;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tracing::{error, info, instrument, Span};
+
 use crate::constants;
 use crate::constants::CLICK_STREAM_NAME;
 
@@ -146,24 +151,77 @@ impl RedisTileStateBuilder {
         Ok(scores)
     }
 
-    pub async fn get_tiles(
+    pub async fn get_tile(
         &self,
         tile_id: i32,
-    ) -> Result<(Option<String>, Option<u64>), PollingConsumerError> {
-        let tile_key = format!("{}{}:country", REDIS_KEY_PREFIX, tile_id);
-        let timestamp_key = format!("{}{}:timestamp", REDIS_KEY_PREFIX, tile_id);
+    ) -> Result<Option<ClickResponse>, PollingConsumerError> {
+        let tile_key = format!("{}{}", REDIS_KEY_PREFIX, tile_id);
 
         let mut redis_conn = self.redis_pool.get().await?;
 
-        // Fetch both keys using a Redis pipeline
-        let (country_id, timestamp): (Option<String>, Option<u64>) = deadpool_redis::redis::pipe()
+        // Fetch both fields from the hash
+        let (timestamp, click_id): (Option<u64>, Option<String>) = deadpool_redis::redis::pipe()
             .atomic()
-            .cmd("GET").arg(&tile_key) // Get country ID
-            .cmd("GET").arg(&timestamp_key) // Get last modification timestamp
+            .cmd("HGET").arg(&tile_key).arg("timestamp") // Get timestamp
+            .cmd("HGET").arg(&tile_key).arg("country") // Get click_id (mapped to country here)
             .query_async(&mut redis_conn)
             .await?;
 
-        Ok((country_id, timestamp))
+        // If either field is missing, return None
+        if let (Some(timestamp_ns), Some(click_id)) = (timestamp, click_id) {
+            Ok(Some(ClickResponse {
+                timestamp_ns,
+                click_id,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn get_all_tiles(
+        &self,
+    ) -> Result<HashMap<i32, Option<ClickResponse>>, PollingConsumerError> {
+        let tiles_key = format!("{}tiles", REDIS_KEY_PREFIX);
+
+        let mut redis_conn: Connection = self.redis_pool.get().await?;
+
+        // Fetch all key-value pairs using HGETALL
+        let flat_map: Vec<(String, String)> = redis_conn
+            .hgetall(tiles_key)
+            .await
+            .map_err(PollingConsumerError::from)?;
+
+        let mut tiles = HashMap::new();
+        for (key, value) in flat_map {
+            if let Some((field, tile_id)) = key.rsplit_once(':') {
+                let tile_id: i32 = tile_id.parse().unwrap_or_default();
+                tiles.entry(tile_id).or_insert_with(|| None);
+
+                match field {
+                    "country" => {
+                        if let Some(entry) = tiles.get_mut(&tile_id) {
+                            *entry = Some(ClickResponse {
+                                timestamp_ns: entry.as_ref().map_or(0, |r: &ClickResponse| r.timestamp_ns),
+                                click_id: value,
+                            });
+                        }
+                    }
+                    "timestamp" => {
+                        if let Ok(timestamp_ns) = value.parse::<u64>() {
+                            if let Some(entry) = tiles.get_mut(&tile_id) {
+                                *entry = Some(ClickResponse {
+                                    timestamp_ns,
+                                    click_id: entry.as_ref().map_or(String::new(), |r| r.click_id.clone()),
+                                });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(tiles)
     }
 
     #[instrument(
@@ -190,7 +248,7 @@ impl RedisTileStateBuilder {
             .and_then(|id| id.parse().ok())
             .ok_or_else(|| PollingConsumerError::Processing("Invalid subject format".to_string()))?;
 
-        let click = clickplanet_proto::clicks::Click::decode(message.payload.clone())?;
+        let click: Click = clickplanet_proto::clicks::Click::decode(message.payload.clone())?;
 
         info!(
            "Received click for tile {} (country: {}, timestamp: {})",
@@ -200,11 +258,10 @@ impl RedisTileStateBuilder {
         let mut redis_conn = self.redis_pool.get().await?;
 
         let tile_key = format!("{}{}:country", REDIS_KEY_PREFIX, tile_id);
-        let timestamp_key = format!("{}{}:timestamp", REDIS_KEY_PREFIX, tile_id);
-        let leaderboard_key = format!("leaderboard");
 
-        let current_timestamp: Option<u64> = cmd("GET")
-            .arg(&timestamp_key)
+        let current_timestamp: Option<u64> = cmd("HGET")
+            .arg(&tile_key)
+            .arg("timestamp")
             .query_async(&mut redis_conn)
             .await?;
 
@@ -214,9 +271,9 @@ impl RedisTileStateBuilder {
         if let Some(current_ts) = current_timestamp {
             if click.timestamp_ns <= current_ts {
                 info!(
-               "Ignoring outdated update for tile {} (current: {}, received: {})",
-               tile_id, current_ts, click.timestamp_ns
-           );
+            "Ignoring outdated update for tile {} (current: {}, received: {})",
+            tile_id, current_ts, click.timestamp_ns
+        );
                 message.ack().await.map_err(|e| PollingConsumerError::Processing(e.to_string()))?;
                 return Ok(());
             }
@@ -224,12 +281,14 @@ impl RedisTileStateBuilder {
 
         deadpool_redis::redis::pipe()
             .atomic()
-            .cmd("SET").arg(&tile_key).arg(&click.country_id)
-            .cmd("SET").arg(&timestamp_key).arg(click.timestamp_ns)
-            .cmd("ZINCRBY").arg(&leaderboard_key).arg(1).arg(&click.country_id.to_string()) // Increment leaderboard score
+            .cmd("HSET").arg(format!("{}{}", REDIS_KEY_PREFIX, tile_id))
+                .arg("country").arg(click.country_id.clone())
+                .arg("timestamp").arg(click.timestamp_ns)
+            .cmd("ZINCRBY").arg("leaderboard")
+                .arg(1)
+                .arg(click.country_id.clone().to_string()) // Increment leaderboard score
             .query_async(&mut redis_conn)
             .await?;
-
 
         let processing_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
