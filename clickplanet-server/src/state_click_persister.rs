@@ -1,24 +1,28 @@
 use std::time::Duration;
 use tracing::info;
-mod redis_click_persistence_service;
+use crate::redis_click_persistence::RedisClickRepository;
+
+mod jetstream_click_streamer;
 mod constants;
 mod telemetry;
+mod redis_click_persistence;
 
-use crate::redis_click_persistence_service::{ConsumerConfig, RedisTileStateBuilder};
+use crate::jetstream_click_streamer::{ConsumerConfig, ClickConsumer};
 use crate::telemetry::{init_telemetry, TelemetryConfig};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_telemetry(TelemetryConfig::default()).await?;
+    let persister = RedisClickRepository::new("redis://localhost:6379").await?;
 
-    let consumer = RedisTileStateBuilder::new(
+    let consumer = ClickConsumer::new(
         "nats://localhost:4222",
-        "redis://localhost:6379",
         Some(ConsumerConfig {
             concurrent_processors: 8,
             ack_wait: Duration::from_secs(10),
             ..Default::default()
-        })
+        }),
+        persister
     )
         .await?;
 
@@ -27,3 +31,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
