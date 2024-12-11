@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio;
 use tokio::net::TcpListener;
+use tracing::info;
 use crate::telemetry::{init_telemetry, TelemetryConfig};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -68,11 +69,13 @@ async fn handle_click(
         .process_click(click_request)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    info!("Response !");  // Debug log
 
     let mut response_bytes = Vec::new();
     response
         .encode(&mut response_bytes)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    info!("Finished !");  // Debug log
 
     Ok((
         [(axum::http::header::CONTENT_TYPE, "application/x-protobuf")],

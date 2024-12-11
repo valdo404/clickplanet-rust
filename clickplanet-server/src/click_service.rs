@@ -4,7 +4,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_nats::jetstream::Context;
 use thiserror::Error;
-use tracing::info;
+use tracing::{info, instrument, Span};
 use uuid::Uuid;
 use crate::constants;
 use crate::constants::{CLICK_STREAM_NAME, CLICK_SUBJECT_PREFIX};
@@ -59,7 +59,17 @@ impl ClickService {
         Ok(Self { jetstream })
     }
 
-
+    #[instrument(
+        name = "publish_click",
+        skip(self, request),
+        fields(
+        tile_id = tracing::field::Empty,
+        country = tracing::field::Empty,
+        click_timestamp = tracing::field::Empty,
+        click_id = tracing::field::Empty,
+        publish_time = tracing::field::Empty,
+        )
+    )]
     pub async fn process_click(
         &self,
         request: clickplanet_proto::clicks::ClickRequest,
@@ -71,7 +81,6 @@ impl ClickService {
             .as_nanos() as u64;
 
         let subject = format!("{}{}", CLICK_SUBJECT_PREFIX, request.tile_id);
-        info!("Launching click on subject: {}", subject);
 
         let response = clickplanet_proto::clicks::ClickResponse {
             timestamp_ns: timestamp,
@@ -80,7 +89,7 @@ impl ClickService {
 
         let click_data = clickplanet_proto::clicks::Click {
             tile_id: request.tile_id,
-            country_id: request.country_id,
+            country_id: request.country_id.clone(),
             timestamp_ns: timestamp,
             click_id: click_id.to_string(),
         };
@@ -91,6 +100,18 @@ impl ClickService {
         self.jetstream
             .publish(subject, click_bytes.into())
             .await?;
+
+        let publish_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+
+        let span = Span::current();
+        span.record("tile_id", request.tile_id);
+        span.record("country", request.country_id.clone());
+        span.record("click_timestamp", timestamp);
+        span.record("click_id", &click_id.to_string());
+        span.record("publish_time", publish_time);
 
         Ok(response)
     }

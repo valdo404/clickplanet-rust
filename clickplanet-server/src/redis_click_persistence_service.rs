@@ -159,8 +159,6 @@ impl RedisTileStateBuilder {
            tile_id, click.country_id, click.timestamp_ns
         );
 
-
-
         let mut redis_conn = self.redis_pool.get().await?;
 
         let tile_key = format!("{}{}:country", REDIS_KEY_PREFIX, tile_id);
