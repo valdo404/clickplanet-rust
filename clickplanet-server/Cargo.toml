@@ -23,6 +23,7 @@ tracing-opentelemetry = "0.28.0"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 opentelemetry_sdk = { version = "0.27.1", features = ["async-std", "rt-tokio"] }
 tokio-stream = "0.1.17"
+base64.workspace = true
 
 [[bin]]
 name = "click-server"

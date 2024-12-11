@@ -2,11 +2,10 @@ use deadpool_redis::{redis, Config as RedisConfig, CreatePoolError, PoolError, R
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use async_nats::ConnectError;
-use clickplanet_proto::clicks::{Click, ClickResponse};
+use clickplanet_proto::clicks::{Click, ClickResponse, Ownership, OwnershipState};
 use tracing::{info, instrument, Span};
 use deadpool_redis::redis::AsyncCommands;
 use thiserror::Error;
-use crate::jetstream_click_streamer::PollingConsumerError;
 
 const TILES_KEY: &str = "tiles";
 
@@ -41,9 +40,9 @@ impl RedisClickRepository {
     ) -> Result<Option<ClickResponse>, RedisPersistenceError> {
         let mut redis_conn = self.redis_pool.get().await?;
 
-        let value: Option<String> = redis_conn.zscore(TILES_KEY, tile_id.to_string()).await?;
+        let tile_contents: Option<String> = redis_conn.zscore(TILES_KEY, tile_id.to_string()).await?;
 
-        match value {
+        match tile_contents {
             Some(val) => {
                 let parts: Vec<&str> = val.split(':').collect();
                 if parts.len() == 2 {
@@ -61,6 +60,41 @@ impl RedisClickRepository {
             }
             None => Ok(None),
         }
+    }
+
+    pub async fn get_ownerships_by_batch(
+        &self,
+        start_tile_id: i32,
+        end_tile_id: i32,
+    ) -> Result<OwnershipState, Box<dyn std::error::Error + Send + Sync>> {
+        let mut redis_conn = self.redis_pool.get().await?;
+        info!("Request: {} / {}", start_tile_id, end_tile_id);
+
+        let tile_contents: Vec<(i64, String)> = redis_conn
+            .zrangebyscore(
+                TILES_KEY,
+                start_tile_id as isize,
+                end_tile_id as isize,
+            )
+            .await?;
+
+        let mut ownerships: Vec<Ownership> = Vec::new();
+
+        for val in tile_contents {
+            let parts: Vec<&str> = val.1.split(':').collect();
+            if parts.len() == 2 {
+                if let Ok(timestamp_ns) = parts[1].parse::<u64>() {
+                    ownerships.push(Ownership {
+                        country_id: "".to_string(),
+                        tile_id: parts[0].parse::<u32>().unwrap_or_default(),
+                    });
+                }
+            }
+        }
+
+        let ownership_state = OwnershipState { ownerships };
+
+        Ok(ownership_state)
     }
 
     #[instrument(
