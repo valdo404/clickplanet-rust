@@ -4,7 +4,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_nats::jetstream::Context;
 use thiserror::Error;
-use tracing::{info, instrument, Span};
+use tracing::{field, info, instrument, Instrument, Span};
 use uuid::Uuid;
 use crate::constants;
 use crate::constants::{CLICK_STREAM_NAME, CLICK_SUBJECT_PREFIX};
@@ -59,21 +59,22 @@ impl ClickService {
         Ok(Self { jetstream })
     }
 
-    // #[instrument(
-    //     name = "publish_click",
-    //     skip(self, request),
-    //     fields(
-    //     tile_id = tracing::field::Empty,
-    //     country = tracing::field::Empty,
-    //     click_timestamp = tracing::field::Empty,
-    //     click_id = tracing::field::Empty,
-    //     publish_time = tracing::field::Empty,
-    //     )
-    // )]
+    #[instrument(
+        name = "process_click",
+        skip(self, request),
+        fields(
+        tile_id = tracing::field::Empty,
+        country = tracing::field::Empty,
+        timestamp = tracing::field::Empty,
+        click_id = tracing::field::Empty,
+        publish_time = tracing::field::Empty,
+        )
+    )]
     pub async fn process_click(
         &self,
         request: clickplanet_proto::clicks::ClickRequest,
     ) -> Result<clickplanet_proto::clicks::ClickResponse, Box<dyn std::error::Error + Send + Sync>> {
+
         let click_id = Uuid::new_v4();
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -106,12 +107,18 @@ impl ClickService {
             .unwrap()
             .as_nanos() as u64;
 
+        // Record span values after async operations
         let span = Span::current();
         span.record("tile_id", request.tile_id);
-        span.record("country", request.country_id.clone());
-        span.record("click_timestamp", timestamp);
+        span.record("country", &request.country_id);
+        span.record("timestamp", timestamp);
         span.record("click_id", &click_id.to_string());
         span.record("publish_time", publish_time);
+
+        info!(
+        "Click processed successfully for tile {} (country: {})",
+            request.tile_id, request.country_id
+        );
 
         Ok(response)
     }

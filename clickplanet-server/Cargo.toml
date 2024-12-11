@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 clickplanet-proto = { path = "../clickplanet-proto" }
-axum = "0.7.9"
+axum = {  version = "0.7.9", features = ["macros"] }
 tokio = { workspace = true, features = ["full"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -15,13 +15,13 @@ bytes = "1.9.0"
 uuid = { version = "1.11.0", features = ["v4"] }
 thiserror = { workspace = true }
 futures = "0.3.31"
-tracing = "0.1.41"
+tracing = { version = "0.1.41" }
 deadpool-redis = { version = "0.13", features = ["rt_tokio_1"] }
 opentelemetry = { version = "0.27.1", features = ["trace"] }
-opentelemetry-otlp = { version = "0.27.0", features = ["trace", "grpc-tonic"] }
+opentelemetry-otlp = { version = "0.27.0", features = ["trace", "grpc-tonic", "http-proto", "http-json"] }
 tracing-opentelemetry = "0.28.0"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-opentelemetry_sdk = "0.27.1"
+opentelemetry_sdk = { version = "0.27.1", features = ["async-std", "rt-tokio"] }
 tokio-stream = "0.1.17"
 
 [[bin]]

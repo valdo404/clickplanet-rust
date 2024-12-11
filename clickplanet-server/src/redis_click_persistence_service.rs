@@ -17,7 +17,7 @@ use tracing::{error, info, instrument, Span};
 use crate::constants;
 use crate::constants::CLICK_STREAM_NAME;
 
-const REDIS_KEY_PREFIX: &str = "tile:";
+const TILES_KEY: &str = "tiles";
 
 #[derive(Clone, Debug)]
 pub struct ConsumerConfig {
@@ -137,7 +137,7 @@ impl RedisTileStateBuilder {
         &self,
         top_n: usize,
     ) -> Result<Vec<(String, f64)>, PollingConsumerError> {
-        let leaderboard_key = format!("{}leaderboard", REDIS_KEY_PREFIX);
+        let leaderboard_key = "leaderboard";
         let mut redis_conn = self.redis_pool.get().await?;
 
         let scores: Vec<(String, f64)> = cmd("ZREVRANGE")
@@ -155,68 +155,53 @@ impl RedisTileStateBuilder {
         &self,
         tile_id: i32,
     ) -> Result<Option<ClickResponse>, PollingConsumerError> {
-        let tile_key = format!("{}{}", REDIS_KEY_PREFIX, tile_id);
-
         let mut redis_conn = self.redis_pool.get().await?;
 
-        // Fetch both fields from the hash
-        let (timestamp, click_id): (Option<u64>, Option<String>) = deadpool_redis::redis::pipe()
-            .atomic()
-            .cmd("HGET").arg(&tile_key).arg("timestamp") // Get timestamp
-            .cmd("HGET").arg(&tile_key).arg("country") // Get click_id (mapped to country here)
-            .query_async(&mut redis_conn)
-            .await?;
+        // Get the value from sorted set
+        let value: Option<String> = redis_conn.zscore(TILES_KEY, tile_id.to_string()).await?;
 
-        // If either field is missing, return None
-        if let (Some(timestamp_ns), Some(click_id)) = (timestamp, click_id) {
-            Ok(Some(ClickResponse {
-                timestamp_ns,
-                click_id,
-            }))
-        } else {
-            Ok(None)
+        match value {
+            Some(val) => {
+                // Parse "country:timestamp" format
+                let parts: Vec<&str> = val.split(':').collect();
+                if parts.len() == 2 {
+                    if let Ok(timestamp_ns) = parts[1].parse::<u64>() {
+                        Ok(Some(ClickResponse {
+                            timestamp_ns,
+                            click_id: parts[0].to_string(),
+                        }))
+                    } else {
+                        Ok(None)
+                    }
+                } else {
+                    Ok(None)
+                }
+            }
+            None => Ok(None),
         }
     }
 
     pub async fn get_all_tiles(
         &self,
     ) -> Result<HashMap<i32, Option<ClickResponse>>, PollingConsumerError> {
-        let tiles_key = format!("{}tiles", REDIS_KEY_PREFIX);
-
-        let mut redis_conn: Connection = self.redis_pool.get().await?;
-
-        // Fetch all key-value pairs using HGETALL
-        let flat_map: Vec<(String, String)> = redis_conn
-            .hgetall(tiles_key)
-            .await
-            .map_err(PollingConsumerError::from)?;
-
+        let mut redis_conn = self.redis_pool.get().await?;
         let mut tiles = HashMap::new();
-        for (key, value) in flat_map {
-            if let Some((field, tile_id)) = key.rsplit_once(':') {
-                let tile_id: i32 = tile_id.parse().unwrap_or_default();
-                tiles.entry(tile_id).or_insert_with(|| None);
 
-                match field {
-                    "country" => {
-                        if let Some(entry) = tiles.get_mut(&tile_id) {
-                            *entry = Some(ClickResponse {
-                                timestamp_ns: entry.as_ref().map_or(0, |r: &ClickResponse| r.timestamp_ns),
-                                click_id: value,
-                            });
-                        }
+        // Get all members with scores from the sorted set
+        let values: Vec<(String, String)> = redis_conn
+            .zrange_withscores(TILES_KEY, 0, -1)
+            .await?;
+
+        for (tile_id_str, value) in values {
+            if let Ok(tile_id) = tile_id_str.parse::<i32>() {
+                let parts: Vec<&str> = value.split(':').collect();
+                if parts.len() == 2 {
+                    if let Ok(timestamp_ns) = parts[1].parse::<u64>() {
+                        tiles.insert(tile_id, Some(ClickResponse {
+                            timestamp_ns,
+                            click_id: parts[0].to_string(),
+                        }));
                     }
-                    "timestamp" => {
-                        if let Ok(timestamp_ns) = value.parse::<u64>() {
-                            if let Some(entry) = tiles.get_mut(&tile_id) {
-                                *entry = Some(ClickResponse {
-                                    timestamp_ns,
-                                    click_id: entry.as_ref().map_or(String::new(), |r| r.click_id.clone()),
-                                });
-                            }
-                        }
-                    }
-                    _ => {}
                 }
             }
         }
@@ -232,7 +217,7 @@ impl RedisTileStateBuilder {
            country = tracing::field::Empty,
            message_timestamp = tracing::field::Empty,
            message_receive_time = tracing::field::Empty,
-           message_processing_time = tracing::field::Empty,s
+           message_processing_time = tracing::field::Empty,
         )
     )]
     async fn handle_message(&self, message: jetstream::Message) -> Result<(), PollingConsumerError> {
@@ -257,36 +242,48 @@ impl RedisTileStateBuilder {
 
         let mut redis_conn = self.redis_pool.get().await?;
 
-        let tile_key = format!("{}{}:country", REDIS_KEY_PREFIX, tile_id);
+        let current_value: Option<String> = redis_conn
+            .zrangebyscore::<String, i32, i32, Vec<String>>(TILES_KEY.to_string(), tile_id, tile_id)
+            .await?
+            .get(0)
+            .cloned();
 
-        let current_timestamp: Option<u64> = cmd("HGET")
-            .arg(&tile_key)
-            .arg("timestamp")
-            .query_async(&mut redis_conn)
-            .await?;
-
-        // Only update if:
-        // 1. No previous timestamp exists (new tile)
-        // 2. New timestamp is greater than the current one
-        if let Some(current_ts) = current_timestamp {
-            if click.timestamp_ns <= current_ts {
-                info!(
-            "Ignoring outdated update for tile {} (current: {}, received: {})",
-            tile_id, current_ts, click.timestamp_ns
+        info!(
+           "Current value for tile {} ({:?})",
+           tile_id, current_value
         );
-                message.ack().await.map_err(|e| PollingConsumerError::Processing(e.to_string()))?;
-                return Ok(());
+
+        // Check if update is needed
+        if let Some(current_val) = current_value {
+            let parts: Vec<&str> = current_val.split(':').collect();
+
+            if parts.len() == 2 {
+                if let Ok(current_ts) = parts[1].parse::<u64>() {
+                    if click.timestamp_ns <= current_ts {
+                        info!(
+                            "Ignoring outdated update for tile {} (current: {}, received: {})",
+                            tile_id, current_ts, click.timestamp_ns
+                        );
+                        message.ack().await.map_err(|e| PollingConsumerError::Processing(e.to_string()))?;
+                        return Ok(());
+                    }
+                }
             }
+        } else {
+            info!("No key for tile {}", tile_id);
         }
 
-        deadpool_redis::redis::pipe()
+        let new_value: String = format!("{}:{}", click.country_id, click.timestamp_ns);
+
+        info!(
+           "New value for tile {} ({:?})",
+           tile_id, new_value
+        );
+
+        redis::pipe()
             .atomic()
-            .cmd("HSET").arg(format!("{}{}", REDIS_KEY_PREFIX, tile_id))
-                .arg("country").arg(click.country_id.clone())
-                .arg("timestamp").arg(click.timestamp_ns)
-            .cmd("ZINCRBY").arg("leaderboard")
-                .arg(1)
-                .arg(click.country_id.clone().to_string()) // Increment leaderboard score
+            .zadd(TILES_KEY, new_value.clone(), tile_id as f64)
+            .zincr("leaderboard", click.country_id.clone(), 1.0)
             .query_async(&mut redis_conn)
             .await?;
 

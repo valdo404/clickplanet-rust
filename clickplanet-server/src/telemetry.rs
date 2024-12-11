@@ -16,14 +16,15 @@ impl Default for TelemetryConfig {
         }
     }
 }
-pub async fn init_telemetry(config: TelemetryConfig) -> Result<(), Box<dyn std::error::Error>> {
-    let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
-        .with_tonic()
-        .with_endpoint(config.otlp_endpoint)
-        .build()?;
 
+pub async fn init_telemetry(config: TelemetryConfig) -> Result<(), Box<dyn std::error::Error>> {
     let tracer_provider = opentelemetry_sdk::trace::TracerProvider::builder()
-        .with_simple_exporter(otlp_exporter)
+        .with_batch_exporter(
+            opentelemetry_otlp::SpanExporter::builder()
+                .with_tonic()
+                .build()?,
+            opentelemetry_sdk::runtime::Tokio,
+        )
         .build();
 
     let tracer = tracer_provider.tracer(config.service_name);
@@ -50,6 +51,7 @@ pub async fn init_telemetry(config: TelemetryConfig) -> Result<(), Box<dyn std::
         .with(telemetry);
 
     tracing::subscriber::set_global_default(subscriber)?;
+    opentelemetry::global::shutdown_tracer_provider();
 
     Ok(())
 }
