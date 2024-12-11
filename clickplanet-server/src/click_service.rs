@@ -1,13 +1,13 @@
-// click_service.rs
-
 use async_nats::{jetstream, ConnectError};
 use prost::Message;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use thiserror::Error;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use async_nats::jetstream::Context;
+use thiserror::Error;
+use tracing::info;
 use uuid::Uuid;
-
-const NUM_PARTITIONS: usize = 32;
+use crate::constants;
+use crate::constants::{CLICK_STREAM_NAME, CLICK_SUBJECT_PREFIX};
 
 pub struct ClickService {
     jetstream: jetstream::Context,
@@ -21,37 +21,44 @@ pub enum ClickServiceError {
     StreamCreationError(String),
 }
 
+pub async fn get_or_create_jet_stream(nats_url: &str) -> Result<Context, ClickServiceError> {
+    let client = async_nats::connect(nats_url).await?;
+    let jetstream = async_nats::jetstream::new(client);
+
+    let stream_config = async_nats::jetstream::stream::Config {
+        name: CLICK_STREAM_NAME.to_string(),
+        subjects: vec![format!("{}*", CLICK_SUBJECT_PREFIX).to_string()],
+        max_age: Duration::from_secs(8 * 60 * 60),
+        discard: async_nats::jetstream::stream::DiscardPolicy::Old,
+        ..Default::default()
+    };
+
+    match jetstream.get_stream(CLICK_STREAM_NAME).await {
+        Ok(_) => {
+            jetstream
+                .update_stream(stream_config)
+                .await
+                .map_err(|e| ClickServiceError::StreamCreationError(e.to_string()))?;
+        }
+        Err(_) => {
+            jetstream
+                .create_stream(stream_config)
+                .await
+                .map_err(|e| ClickServiceError::StreamCreationError(e.to_string()))?;
+        }
+    }
+
+    Ok(jetstream)
+}
+
 
 impl ClickService {
     pub async fn new(nats_url: &str) -> Result<Self, ClickServiceError> {
-        let client = async_nats::connect(nats_url).await?;
-        let jetstream = async_nats::jetstream::new(client);
-
-        let stream_config = async_nats::jetstream::stream::Config {
-            name: "CLICKS".to_string(),
-            subjects: vec!["clicks.partition.*".to_string()],
-            max_age: Duration::from_secs(8 * 60 * 60),
-            discard: async_nats::jetstream::stream::DiscardPolicy::Old,
-            ..Default::default()
-        };
-
-        match jetstream.get_stream("CLICKS").await {
-            Ok(_) => {
-                jetstream
-                    .update_stream(stream_config)
-                    .await
-                    .map_err(|e| ClickServiceError::StreamCreationError(e.to_string()))?;
-            }
-            Err(_) => {
-                jetstream
-                    .create_stream(stream_config)
-                    .await
-                    .map_err(|e| ClickServiceError::StreamCreationError(e.to_string()))?;
-            }
-        }
+        let jetstream = get_or_create_jet_stream(nats_url).await?;
 
         Ok(Self { jetstream })
     }
+
 
     pub async fn process_click(
         &self,
@@ -63,8 +70,8 @@ impl ClickService {
             .unwrap()
             .as_nanos() as u64;
 
-        let partition = Self::consistent_hash(request.tile_id, NUM_PARTITIONS);
-        let subject = format!("clicks.partition.{}", partition);
+        let subject = format!("{}{}", CLICK_SUBJECT_PREFIX, request.tile_id);
+        info!("Launching click on subject: {}", subject);
 
         let response = clickplanet_proto::clicks::ClickResponse {
             timestamp_ns: timestamp,
@@ -86,11 +93,5 @@ impl ClickService {
             .await?;
 
         Ok(response)
-    }
-
-    fn consistent_hash<T: Hash>(key: T, num_partitions: usize) -> usize {
-        let mut hasher = DefaultHasher::new();
-        key.hash(&mut hasher);
-        (hasher.finish() as usize) % num_partitions
     }
 }
