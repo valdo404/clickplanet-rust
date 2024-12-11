@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 clickplanet-proto = { path = "../clickplanet-proto" }
-axum = {  version = "0.7.9", features = ["macros"] }
+axum = {  version = "0.7.9", features = ["macros", "ws"] }
 tokio = { workspace = true, features = ["full"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -24,6 +24,7 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 opentelemetry_sdk = { version = "0.27.1", features = ["async-std", "rt-tokio"] }
 tokio-stream = "0.1.17"
 base64.workspace = true
+futures-util = "0.3.31"
 
 [[bin]]
 name = "click-server"
