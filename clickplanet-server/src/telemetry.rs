@@ -30,7 +30,7 @@ pub async fn init_telemetry(config: TelemetryConfig) -> Result<(), Box<dyn std::
     let tracer = tracer_provider.tracer(config.service_name);
 
     // Create the OpenTelemetry layer
-    let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
+    let telemetry    = tracing_opentelemetry::layer().with_tracer(tracer);
 
     // Create a formatting layer for console output
     let fmt_layer = fmt::layer()

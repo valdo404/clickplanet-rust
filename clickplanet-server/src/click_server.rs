@@ -15,6 +15,7 @@ use axum::{
     routing::any,
     Router,
 };
+
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -27,11 +28,14 @@ use base64::{encode};
 use futures_util::{stream::SplitStream, SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use std::{time::Duration};
+use axum::extract::WebSocketUpgrade;
 use prost::Message;
 use tokio::sync::Mutex;
 use clickplanet_proto::clicks;
+use tokio::sync::broadcast;
+use tokio::sync::broadcast::{Receiver, Sender};
 
-
+use clickplanet_proto::clicks::UpdateNotification;
 use crate::redis_click_persistence::RedisClickRepository;
 use crate::telemetry::{init_telemetry, TelemetryConfig};
 
@@ -48,7 +52,8 @@ struct BatchRequestPayload {
 #[derive(Clone)]
 struct AppState {
     click_service: Arc<ClickService>,
-    click_persistence: Arc<RedisClickRepository>
+    click_persistence: Arc<RedisClickRepository>,
+    click_broadcaster: Arc<broadcast::Sender<clicks::Click>>,
 }
 
 #[tokio::main]
@@ -61,14 +66,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run(nats_url: &str, redis_url: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let (sender, _) = broadcast::channel(32);
+    let sender_ref = Arc::new(sender);
+
     let state = AppState {
-        click_service: Arc::new(ClickService::new(nats_url).await.unwrap()),
-        click_persistence: Arc::new(RedisClickRepository::new(redis_url).await.unwrap())
+        click_service: Arc::new(ClickService::new(nats_url, sender_ref.clone()).await.unwrap()),
+        click_persistence: Arc::new(RedisClickRepository::new(redis_url).await.unwrap()),
+        click_broadcaster: sender_ref
     };
 
     let app = Router::new()
         .route("/api/click", post(handle_click))
         .route("/api/ownerships-by-batch", post(handle_get_ownerships_by_batch))
+        .route("/ws/listen", get(handle_ws_upgrade))  // Add this
         .with_state(state);
 
     let listener = TcpListener::bind("0.0.0.0:3000").await?;
@@ -155,3 +165,53 @@ async fn handle_get_ownerships_by_batch(
     Ok(axum::Json(payload))
 }
 
+
+async fn handle_ws_upgrade(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    ws.on_upgrade(|socket| handle_ws_connection(socket, state))
+}
+async fn handle_ws_connection(socket: WebSocket, state: AppState) {
+    let (sender, mut receiver) = socket.split();
+    let sender_arc = Arc::new(Mutex::new(sender));
+
+    let mut click_subscription = state.click_broadcaster.subscribe();
+    let sender_arc_clone = sender_arc.clone();
+
+    let mut send_task = tokio::spawn(async move {
+        while let Ok(notification) = click_subscription.recv().await {
+            let mut buf = Vec::new();
+            if notification.encode(&mut buf).is_ok() {
+                let mut sender = sender_arc.lock().await;
+                if let Err(e) = sender.send(WebsocketMessage::Binary(buf)).await {
+                    eprintln!("Error sending WebSocket message: {}", e);
+                    break;
+                }
+            }
+        }
+    });
+
+
+    let mut recv_task = tokio::spawn(async move {
+        while let Some(Ok(message)) = receiver.next().await {
+            match message {
+                WebsocketMessage::Ping(payload) => {
+                    let mut sender = sender_arc_clone.lock().await;
+                    if let Err(e) = sender.send(WebsocketMessage::Pong(payload)).await {
+                        eprintln!("Error sending pong: {}", e);
+                        break;
+                    }
+                }
+                WebsocketMessage::Close(_) => break,
+                _ => {}
+            }
+        }
+    });
+
+    // Wait for either task to complete
+    tokio::select! {
+        _ = &mut send_task => recv_task.abort(),
+        _ = &mut recv_task => send_task.abort(),
+    }
+}

@@ -1,16 +1,20 @@
 use async_nats::{jetstream, ConnectError};
 use prost::Message;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_nats::jetstream::Context;
 use thiserror::Error;
+use tokio::sync::broadcast::Sender;
 use tracing::{field, info, instrument, Instrument, Span};
 use uuid::Uuid;
+use clickplanet_proto::clicks::{Click, UpdateNotification};
 use crate::constants;
 use crate::constants::{CLICK_STREAM_NAME, CLICK_SUBJECT_PREFIX};
 
 pub struct ClickService {
     jetstream: jetstream::Context,
+    sender: Arc<Sender<Click>>,
 }
 
 #[derive(Error, Debug)]
@@ -53,10 +57,10 @@ pub async fn get_or_create_jet_stream(nats_url: &str) -> Result<Context, ClickSe
 
 
 impl ClickService {
-    pub async fn new(nats_url: &str) -> Result<Self, ClickServiceError> {
+    pub async fn new(nats_url: &str, sender: Arc<Sender<Click>>) -> Result<Self, ClickServiceError> {
         let jetstream = get_or_create_jet_stream(nats_url).await?;
 
-        Ok(Self { jetstream })
+        Ok(Self { jetstream, sender })
     }
 
     #[instrument(
@@ -101,6 +105,8 @@ impl ClickService {
         self.jetstream
             .publish(subject, click_bytes.into())
             .await?;
+
+        self.sender.send(click_data)?;
 
         let publish_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
