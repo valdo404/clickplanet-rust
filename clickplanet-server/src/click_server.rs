@@ -2,17 +2,17 @@ mod click_service;
 mod constants;
 mod telemetry;
 mod redis_click_persistence;
+mod ownership_service;
 
 use crate::click_service::ClickService;
 use axum::{
     extract::{Json, State},
     extract::ws::{Message as WebsocketMessage},
-    extract::ws::{self, WebSocket},
+    extract::ws::{WebSocket},
     http::StatusCode,
     response::IntoResponse,
     routing::post,
     routing::get,
-    routing::any,
     Router,
 };
 
@@ -25,17 +25,17 @@ use tokio::net::TcpListener;
 use tracing::{error, info};
 use base64::{encode};
 
-use futures_util::{stream::SplitStream, SinkExt, StreamExt};
-use tokio::sync::mpsc;
+use futures_util::{SinkExt, StreamExt};
 use std::{time::Duration};
 use axum::extract::WebSocketUpgrade;
+use axum::serve::Serve;
 use prost::Message;
 use tokio::sync::Mutex;
-use clickplanet_proto::clicks;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::{Receiver, Sender};
-
-use clickplanet_proto::clicks::UpdateNotification;
+use tokio::task::JoinHandle;
+use clickplanet_proto::clicks::{Click, UpdateNotification};
+use crate::ownership_service::OwnershipUpdateService;
 use crate::redis_click_persistence::RedisClickRepository;
 use crate::telemetry::{init_telemetry, TelemetryConfig};
 
@@ -53,7 +53,8 @@ struct BatchRequestPayload {
 struct AppState {
     click_service: Arc<ClickService>,
     click_persistence: Arc<RedisClickRepository>,
-    click_broadcaster: Arc<broadcast::Sender<clicks::Click>>,
+    update_notifification_broadcaster: Arc<Sender<UpdateNotification>>,
+    ownership_update_service: Arc<OwnershipUpdateService>,
 }
 
 #[tokio::main]
@@ -66,13 +67,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run(nats_url: &str, redis_url: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let (sender, _) = broadcast::channel(32);
-    let sender_ref = Arc::new(sender);
+    let (click_sender, _) = broadcast::channel(1000);
+    let click_sender_ref = Arc::new(click_sender);
+
+    let (update_notification_sender, _) = broadcast::channel(1000);
+    let update_sender_ref = Arc::new(update_notification_sender);
+
+    let repository = Arc::new(RedisClickRepository::new(redis_url).await.unwrap());
+
+    let update_service = Arc::new(OwnershipUpdateService::new(repository.clone(), click_sender_ref.clone(), update_sender_ref.clone()));
 
     let state = AppState {
-        click_service: Arc::new(ClickService::new(nats_url, sender_ref.clone()).await.unwrap()),
-        click_persistence: Arc::new(RedisClickRepository::new(redis_url).await.unwrap()),
-        click_broadcaster: sender_ref
+        click_service: Arc::new(ClickService::new(nats_url, click_sender_ref.clone()).await.unwrap()),
+        click_persistence: repository.clone(),
+        update_notifification_broadcaster: update_sender_ref.clone(),
+        ownership_update_service: update_service.clone()
     };
 
     let app = Router::new()
@@ -84,13 +93,23 @@ async fn run(nats_url: &str, redis_url: &str) -> Result<(), Box<dyn std::error::
     let listener = TcpListener::bind("0.0.0.0:3000").await?;
     println!("Server listening on 0.0.0.0:3000");
 
-    // Keep telemetry context alive by wrapping the server
-    let server = axum::serve(listener, app);
+    let server: Serve<Router, Router> = axum::serve(listener, app);
+    let update_service_handle = update_service.run();
 
-    // Run the server inside a tracing span
-    tracing::info_span!("server").in_scope(|| async {
-        server.await
-    }).await?;
+    tokio::select! {
+        result = server => {
+            if let Err(e) = result {
+                error!("Server error: {:?}", e);
+                return Err(e.to_string().into());
+            }
+        }
+        result = update_service_handle => {
+            if let Err(e) = result {
+                error!("Ownership update service error: {:?}", e);
+                return Err(e.to_string().into());
+            }
+        }
+    }
 
     Ok(())
 }
@@ -105,7 +124,7 @@ async fn handle_click(
         })?;
 
     tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        Duration::from_secs(5),
         state.click_service.process_click(click_request)
     )
         .await
@@ -132,7 +151,7 @@ async fn handle_get_ownerships_by_batch(
     info!("Request: {:?}", batch_request);
 
     let response = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        Duration::from_secs(5),
         state.click_persistence.get_ownerships_by_batch(
             batch_request.start_tile_id,
             batch_request.end_tile_id,
@@ -176,11 +195,11 @@ async fn handle_ws_connection(socket: WebSocket, state: AppState) {
     let (sender, mut receiver) = socket.split();
     let sender_arc = Arc::new(Mutex::new(sender));
 
-    let mut click_subscription = state.click_broadcaster.subscribe();
+    let mut update_notification_subscription: Receiver<UpdateNotification> = state.update_notifification_broadcaster.subscribe();
     let sender_arc_clone = sender_arc.clone();
 
     let mut send_task = tokio::spawn(async move {
-        while let Ok(notification) = click_subscription.recv().await {
+        while let Ok(notification) = update_notification_subscription.recv().await {
             let mut buf = Vec::new();
             if notification.encode(&mut buf).is_ok() {
                 let mut sender = sender_arc.lock().await;
@@ -214,4 +233,16 @@ async fn handle_ws_connection(socket: WebSocket, state: AppState) {
         _ = &mut send_task => recv_task.abort(),
         _ = &mut recv_task => send_task.abort(),
     }
+}
+
+pub fn init_ownership_update_service(
+    ownership_update_service: OwnershipUpdateService,
+) -> JoinHandle<()> {
+    // Spawn the service
+    tokio::spawn(async move {
+        if let Err(e) = ownership_update_service.run().await {
+            error!("Ownership update service error: {:?}", e);
+        }
+    })
+
 }

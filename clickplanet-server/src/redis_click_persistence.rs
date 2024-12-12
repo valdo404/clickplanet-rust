@@ -22,6 +22,8 @@ pub enum RedisPersistenceError {
     RedisPool(#[from] PoolError),
     #[error("Redis create pool error: {0}")]
     CreateRedisPool(#[from] CreatePoolError),
+    #[error("Bad redis key: {0}")]
+    BadKeyError(String),
 }
 
 impl RedisClickRepository {
@@ -37,29 +39,26 @@ impl RedisClickRepository {
     pub async fn get_tile(
         &self,
         tile_id: i32,
-    ) -> Result<Option<ClickResponse>, RedisPersistenceError> {
+    ) -> Result<Option<Ownership>, RedisPersistenceError> {
         let mut redis_conn = self.redis_pool.get().await?;
 
-        let tile_contents: Option<String> = redis_conn.zscore(TILES_KEY, tile_id.to_string()).await?;
+        let tile_contents: Vec<String> = redis_conn
+            .zrangebyscore_limit::<String, i32, i32, Vec<String>>(TILES_KEY.to_string(), tile_id, tile_id, 0,1)
+            .await?;
 
-        match tile_contents {
-            Some(val) => {
-                let parts: Vec<&str> = val.split(':').collect();
-                if parts.len() == 2 {
-                    if let Ok(timestamp_ns) = parts[1].parse::<u64>() {
-                        Ok(Some(ClickResponse {
-                            timestamp_ns,
-                            click_id: parts[0].to_string(),
-                        }))
-                    } else {
-                        Ok(None)
-                    }
-                } else {
-                    Ok(None)
+        if let Some(val) = tile_contents.first() {
+            let parts: Vec<&str> = val.split(':').collect();
+            if parts.len() == 2 {
+                if let Ok(timestamp_ns) = parts[1].parse::<u64>() {
+                    return Ok(Some(Ownership {
+                        tile_id: tile_id as u32,
+                        country_id: parts[0].to_string(),
+                    }));
                 }
             }
-            None => Ok(None),
         }
+
+        Ok(None)
     }
 
     pub async fn get_ownerships_by_batch(
@@ -71,7 +70,7 @@ impl RedisClickRepository {
         info!("Request: {} / {}", start_tile_id, end_tile_id);
 
         let tile_contents: Vec<(i64, String)> = redis_conn
-            .zrangebyscore(
+            .zrangebyscore_withscores(
                 TILES_KEY,
                 start_tile_id as isize,
                 end_tile_id as isize,
@@ -80,13 +79,13 @@ impl RedisClickRepository {
 
         let mut ownerships: Vec<Ownership> = Vec::new();
 
-        for val in tile_contents {
-            let parts: Vec<&str> = val.1.split(':').collect();
+        for (tile_id, val) in tile_contents {
+            let parts: Vec<&str> = val.split(':').collect();
             if parts.len() == 2 {
                 if let Ok(timestamp_ns) = parts[1].parse::<u64>() {
                     ownerships.push(Ownership {
-                        country_id: "".to_string(),
-                        tile_id: parts[0].parse::<u32>().unwrap_or_default(),
+                        tile_id: tile_id as u32,  // Use the score as tile_id
+                        country_id: parts[0].to_string(),  // First part is country_id
                     });
                 }
             }
@@ -147,7 +146,10 @@ impl RedisClickRepository {
                         return Ok(());
                     }
                 }
+            } else {
+                return Err(RedisPersistenceError::BadKeyError(current_val))
             }
+
         } else {
             info!("No key for tile {}", tile_id);
         }
@@ -159,12 +161,23 @@ impl RedisClickRepository {
            tile_id, new_value
         );
 
-        redis::pipe()
+        let old_values: Vec<String> = redis_conn
+            .zrangebyscore(TILES_KEY, tile_id as f64, tile_id as f64)
+            .await?;
+
+        let mut pipe = redis::pipe();
+        let mut pipe = pipe
             .atomic()
             .zadd(TILES_KEY, new_value.clone(), tile_id as f64)
-            .zincr("leaderboard", click.country_id.clone(), 1.0)
-            .query_async(&mut redis_conn)
-            .await?;
+            .zincr("leaderboard", click.country_id.clone(), 1.0);
+
+        for old_value in old_values {
+            if old_value != new_value {
+                pipe = pipe.zrem(TILES_KEY, old_value);
+            }
+        }
+
+        pipe.query_async(&mut redis_conn).await?;
 
         let processing_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
