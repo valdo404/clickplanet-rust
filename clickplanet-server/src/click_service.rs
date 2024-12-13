@@ -104,7 +104,7 @@ impl ClickService {
             .publish(subject, click_bytes.into())
             .await?;
 
-        self.sender.send(click_data)?;
+        // self.sender.send(click_data)?;
 
         let publish_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)

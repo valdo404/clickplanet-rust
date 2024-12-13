@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use async_nats::jetstream;
-use futures_util::StreamExt;
+use futures_util::{future, StreamExt};
 use prost::Message;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::Receiver;
@@ -38,10 +38,10 @@ impl OwnershipUpdateService {
     }
 
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut click_rx = self.click_sender.subscribe();
+        // let mut click_rx = self.click_sender.subscribe();
 
         let nats_consumer = self.create_consumer().await?;
-        let mut nats_stream = nats_consumer
+        nats_consumer
             .map(|message_result| {
                 let this = self.clone();
                 async move {
@@ -55,29 +55,31 @@ impl OwnershipUpdateService {
                     }
                 }
             })
-            .buffer_unordered(self.consumer_config.concurrent_processors);
+            .buffer_unordered(self.consumer_config.concurrent_processors)
+            .for_each(|_| future::ready(()))
+            .await;
 
-        loop {
-            tokio::select! {
-                result = click_rx.recv() => {
-                    match result {
-                        Ok(click) => {
-                            if let Err(e) = self.process_click(click).await {
-                                error!("Error processing broadcast click: {:?}", e);
-                            }
-                        }
-                        Err(e) => {
-                            error!("Error receiving broadcast message: {:?}", e);
-                            break;
-                        }
-                    }
-                }
-                Some(_) = nats_stream.next() => {
-                    continue;
-                }
-                else => break,
-            }
-        }
+        // loop {
+        //     tokio::select! {
+        //         result = click_rx.recv() => {
+        //             match result {
+        //                 Ok(click) => {
+        //                     if let Err(e) = self.process_click(click).await {
+        //                         error!("Error processing broadcast click: {:?}", e);
+        //                     }
+        //                 }
+        //                 Err(e) => {
+        //                     error!("Error receiving broadcast message: {:?}", e);
+        //                     break;
+        //                 }
+        //             }
+        //         }
+        //         Some(_) = nats_stream.next() => {
+        //             continue;
+        //         }
+        //         else => break,
+        //     }
+        // }
 
         Ok(())
     }
