@@ -17,21 +17,17 @@ COPY clickplanet-proto/ ./clickplanet-proto/
 
 RUN cargo build --release --bin clickplanet-robot
 
-# Final stage
 FROM debian:bookworm-slim
 
 WORKDIR /app
 
-# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     libssl3 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy only the built binary
 COPY --from=builder /usr/src/app/target/release/clickplanet-robot ./
 
-# Copy required data files
 COPY countries.geojson \
      tile_to_countries.json \
      coordinates.json \
