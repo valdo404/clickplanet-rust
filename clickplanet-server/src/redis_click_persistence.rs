@@ -1,5 +1,4 @@
 use crate::click_persistence::{ClickRepository, ClickRepositoryError};
-use crate::click_persistence::{LeaderboardError, LeaderboardRepository};
 use async_trait::async_trait;
 use clickplanet_proto::clicks::UpdateNotification;
 use clickplanet_proto::clicks::{Click, Ownership, OwnershipState};

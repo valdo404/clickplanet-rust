@@ -35,6 +35,11 @@ pub enum LeaderboardError {
 }
 
 #[async_trait]
+pub trait LeaderboardMaintainer: Send + Sync {
+    async fn update_country_index<'a>(&self, tile_id: u32, new_country: &'a str, old_country: Option<&'a str>);
+}
+
+#[async_trait]
 pub trait LeaderboardRepository: Send + Sync {
     async fn get_score(&self, country_id: &str) -> Result<u32, LeaderboardError>;
     async fn leaderboard(&self) -> Result<std::collections::HashMap<String, u32>, LeaderboardError>;

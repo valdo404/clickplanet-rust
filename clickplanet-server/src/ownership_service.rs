@@ -2,7 +2,7 @@ use async_nats::jetstream;
 use async_nats::jetstream::consumer::pull::Stream;
 use clickplanet_proto::clicks::{Click, Ownership, UpdateNotification};
 use futures_util::stream::Map;
-use futures_util::{future, StreamExt};
+use futures_util::{future, StreamExt, TryStreamExt};
 use prost::Message;
 use std::error::Error;
 use std::sync::Arc;
@@ -12,7 +12,7 @@ use tokio::sync::broadcast::Receiver;
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
-use crate::click_persistence::{ClickRepository, LeaderboardRepository};
+use crate::click_persistence::{ClickRepository, LeaderboardMaintainer, LeaderboardRepository};
 use crate::nats_commons;
 use crate::nats_commons::{get_stream, ConsumerConfig, PollingConsumerError};
 use crate::redis_click_persistence::{RedisClickRepository, RedisPersistenceError};
@@ -38,6 +38,7 @@ pub enum ConsumerError {
 #[derive(Clone)]
 pub struct OwnershipUpdateService {
     click_repository: Arc<dyn ClickRepository>,
+    leaderboard_maintainer: Arc<dyn LeaderboardMaintainer>,
     click_sender: Arc<broadcast::Sender<Click>>,
     update_tx: Arc<broadcast::Sender<UpdateNotification>>,
     jetstream: Arc<jetstream::Context>,
@@ -47,6 +48,7 @@ pub struct OwnershipUpdateService {
 impl OwnershipUpdateService {
     pub fn new(
         click_repository: Arc<dyn ClickRepository>,
+        leaderboard_maintainer: Arc<dyn LeaderboardMaintainer>,
         click_sender: Arc<broadcast::Sender<Click>>,
         update_sender: Arc<broadcast::Sender<UpdateNotification>>,
         jetstream: Arc<jetstream::Context>,
@@ -54,6 +56,7 @@ impl OwnershipUpdateService {
     ) -> Self {
         Self {
             click_repository,
+            leaderboard_maintainer,
             click_sender,
             update_tx: update_sender,
             jetstream,
@@ -115,47 +118,54 @@ impl OwnershipUpdateService {
         })
     }
 
-    async fn launch_nats_consumer(self, mut stream: Stream) -> JoinHandle<()> {
-        tokio::spawn(async move {
-            loop {
-                match stream.next().await {
-                    Some(Ok(message)) => {
-                        let msg_subject = message.subject.clone();
+    async fn launch_nats_consumer(self, stream: Stream) -> JoinHandle<()> {
+        let self_arc = Arc::new(self);
 
-                        match self.handle_nats_message(message).await {
-                            Ok(_) => {
-                                info!("Successfully processed NATS message - Subject: {}", msg_subject);
-                            }
-                            Err(e) => {
-                                error!("Failed to process NATS message - Subject: {} - Error: {:?}",
-                                msg_subject, e);
-                            }
-                        }
-                    }
-                    Some(Err(e)) => {
-                        error!("Error receiving NATS message: {:?}", e);
-                    }
-                    None => {
-                        warn!("NATS stream ended");
-                        break;
-                    }
+        tokio::spawn({
+            let self_arc = self_arc.clone();
+            let config = self_arc.consumer_config.concurrent_processors;
+            let stream = stream;
+
+            async move {
+                if let Err(e) = process_nats_messages(
+                    stream,
+                    self_arc,
+                    config
+                ).await {
+                    error!("NATS message processing failed: {:?}", e);
                 }
             }
         })
     }
-    
+
     async fn handle_nats_message(&self, message: jetstream::Message) -> Result<(), ConsumerError> {
-        let click: Click = clickplanet_proto::clicks::Click::decode(message.payload.clone())?;
+        let click: Click = match clickplanet_proto::clicks::Click::decode(message.payload.clone()) {
+            Ok(click) => click,
+            Err(e) => {
+                error!("Failed to decode message payload: {}", e);
+                // Try to ack malformed messages to avoid redelivery
+                if let Err(ack_err) = message.ack().await {
+                    error!("Failed to ack malformed message: {}", ack_err);
+                }
+                return Ok(());
+            }
+        };
 
-        self.process_click(click).await
-            .map_err(|e| ConsumerError::ProcessingError(e.to_string()))?;
-
-        message
-            .ack()
-            .await
-            .map_err(|e| ConsumerError::AckError(e.to_string()))?;
-
-        Ok(())
+        match self.process_click(click).await {
+            Ok(_) => {
+                if let Err(e) = message.ack().await {
+                    error!("Failed to acknowledge message after successful processing: {}", e);
+                }
+                Ok(())
+            }
+            Err(e) => {
+                error!("Failed to process click: {}", e);
+                if let Err(ack_err) = message.ack().await {
+                    error!("Also failed to acknowledge failed message: {}", ack_err);
+                }
+                Ok(())
+            }
+        }
     }
 
     async fn create_consumer(&self) -> Result<jetstream::consumer::pull::Stream, PollingConsumerError> {
@@ -195,6 +205,11 @@ impl OwnershipUpdateService {
                     country_id: click.country_id,
                 };
 
+                self.leaderboard_maintainer.update_country_index(click.tile_id as u32,
+                                                                 notification.country_id.as_str(),
+                                                                 Some(notification.previous_country_id.as_str())
+                                                                     .filter(|string| !string.is_empty())).await;
+
                 let result = self.update_tx.send(notification);
                 if let Err(e) = result {
                     tracing::debug!("No listener for ownership update: {:?}", e);
@@ -205,35 +220,27 @@ impl OwnershipUpdateService {
         Ok(())
     }
 }
+
 async fn process_nats_messages(
     nats_stream: Stream,
     owner: Arc<OwnershipUpdateService>,
     config: usize,
 ) -> Result<(), ConsumerError> {
-    // Rest of the implementation remains the same
     nats_stream
         .map(|message_result| {
-            let result: Result<jetstream::Message, ConsumerError> = message_result.map_err(|e| ConsumerError::ProcessingError(e.to_string()));
-            result
+            message_result.map_err(|e| ConsumerError::ProcessingError(e.to_string()))
         })
-        .map(|message_result| {
-            let this = owner.clone();
-            let result: Result<jetstream::Message, ConsumerError> = message_result.map_err(|e| ConsumerError::ProcessingError(e.to_string()));
+        .try_for_each_concurrent(config, |message| {
+            let owner = owner.clone();
 
             async move {
-                match result {
-                    Ok(msg) => {
-                        if let Err(e) = this.handle_nats_message(msg).await {
-                            error!("Error processing NATS message: {}", e);
-                        }
-                    }
-                    Err(e) => error!("Error receiving NATS message: {}", e),
+                if let Err(e) = owner.handle_nats_message(message).await {
+                    error!("Error processing NATS message: {}", e);
                 }
+                Ok(())
             }
         })
-        .buffer_unordered(config)
-        .for_each(|_| future::ready(()))
-        .await;
+        .await?;
 
     Ok(())
 }

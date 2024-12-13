@@ -1,9 +1,10 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use papaya::HashMap as PapayaMap;
+use crate::click_persistence::{ClickRepository, ClickRepositoryError, LeaderboardError, LeaderboardMaintainer, LeaderboardRepository};
 use async_trait::async_trait;
 use clickplanet_proto::clicks::{Click, Ownership, OwnershipState};
-use crate::click_persistence::{ClickRepository, ClickRepositoryError, LeaderboardRepository};
+use papaya::{HashMap as PapayaMap, HashMapRef, HashSet, LocalGuard, Operation};
+use std::collections::HashMap;
+use std::hash::RandomState;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct TileData {
@@ -14,19 +15,19 @@ pub struct TileData {
 #[derive(Clone)]
 pub struct PapayaClickRepository {
     tiles: Arc<PapayaMap<u32, TileData>>,
+    country_tiles: Arc<PapayaMap<String, Arc<HashSet<u32>>>>,
 }
 
 impl PapayaClickRepository {
     pub fn new() -> Self {
         Self {
             tiles: Arc::new(PapayaMap::new()),
+            country_tiles: Arc::new(PapayaMap::new()),
         }
     }
 
     pub async fn populate_with(repository: Arc<dyn ClickRepository>) -> Result<Self, ClickRepositoryError> {
-        let papaya = Self {
-            tiles: Arc::new(PapayaMap::new()),
-        };
+        let papaya= Self::new();
 
         let ownership_state: OwnershipState = repository.get_ownerships().await?;
 
@@ -34,15 +35,29 @@ impl PapayaClickRepository {
             let tile_id = ownership.tile_id;
             papaya.save_click(tile_id, &Click{
                 tile_id: tile_id as i32,
-                country_id: ownership.country_id,
+                country_id: ownership.country_id.clone(),
                 timestamp_ns: ownership.timestamp_ns,
                 click_id: "".to_string(),
             }).await?;
+
+            papaya.update_country_index(tile_id, &ownership.country_id, None).await;
         }
 
         Ok(papaya)
     }
+
+    fn new_tiles(tile_id: u32) -> Arc<HashSet<u32>> {
+        let cloned_set = HashSet::new().clone();
+
+        {
+            let pinned = cloned_set.pin();
+            pinned.insert(tile_id);
+        }
+
+        Arc::new(cloned_set)
+    }
 }
+
 
 impl Default for PapayaClickRepository {
     fn default() -> Self {
@@ -122,32 +137,74 @@ impl ClickRepository for PapayaClickRepository {
     }
 }
 
-pub struct PapayaLeaderboardRepository {
-    scores: Arc<PapayaMap<String, u32>>,
-}
+#[async_trait]
+impl LeaderboardMaintainer for PapayaClickRepository {
+    async fn update_country_index<'a>(&self, tile_id: u32, new_country: &'a str, old_country: Option<&'a str>) {
+        let country_map: HashMapRef<String, Arc<HashSet<u32>>, RandomState, LocalGuard> = self.country_tiles.pin();
 
-impl PapayaLeaderboardRepository {
-    pub fn new() -> Self {
-        Self {
-            scores: Arc::new(PapayaMap::new()),
-        }
+        old_country.iter().for_each(|country| {
+            country_map.compute(country.to_string(), |optional| {
+                match optional {
+                    Some((_, existing)) => {
+                        let pinned_set = existing.pin();
+                        pinned_set.remove(&tile_id);
+
+                        if pinned_set.is_empty() {
+                            Operation::<Arc<papaya::HashSet<u32>>, ()>::Insert(existing.clone())
+                        } else {
+                            Operation::Remove
+                        }
+                    }
+                    None => {
+                        Operation::Abort(())
+                    }
+                }
+            });
+        });
+
+        country_map.update_or_insert(new_country.to_string(), |existing| {
+            let set = existing.pin();
+            set.insert(tile_id);
+            existing.clone()
+        }, Self::new_tiles(tile_id));
     }
 }
 
-impl Default for PapayaLeaderboardRepository {
-    fn default() -> Self {
-        Self::new()
+#[async_trait]
+impl LeaderboardRepository for PapayaClickRepository {
+    async fn get_score(&self, country_id: &str) -> Result<u32, LeaderboardError> {
+        let country_map = self.country_tiles.pin();
+        let score = country_map
+            .get(country_id)
+            .map(|tiles|
+                tiles.len() as u32)
+            .unwrap_or(0);
+
+        Ok(score)
+    }
+
+    async fn leaderboard(&self) -> Result<HashMap<String, u32>, LeaderboardError> {
+        let country_map = self.country_tiles.pin();
+
+        let scores: HashMap<String, u32> = country_map
+            .iter()
+            .map(|(country, tiles)|
+                (country.clone(), tiles.len() as u32))
+            .filter(|(_, score)| *score > 0)
+            .collect();
+
+        Ok(scores)
     }
 }
+
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
-    use uuid::{uuid, Uuid};
-    use clickplanet_proto::clicks::UpdateNotification;
     use crate::click_persistence::LeaderboardOnClicks;
+    use std::collections::HashMap;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use uuid::Uuid;
 
     #[tokio::test]
     async fn test_concurrent_updates() {
@@ -181,7 +238,7 @@ mod tests {
 
         // Verify final state
         let ownership = repo.get_tile(tile_id).await.unwrap().unwrap();
-        assert_eq!(ownership.country_id, "COUNTRY0"); // Last country should win
+        assert_eq!(ownership.country_id, "COUNTRY4"); // Last country should win
     }
 
     #[tokio::test]
@@ -232,5 +289,96 @@ mod tests {
 
         assert_eq!(leaderboard, expected_map);
         assert_eq!(score0 + score1 + score2, 10);
+    }
+}
+
+
+#[cfg(test)]
+mod maintainer_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_update_and_scores() {
+        let repo = PapayaClickRepository::new();
+
+        repo.update_country_index(1, "country1", None);
+
+        assert_eq!(repo.get_score("country1").await.unwrap(), 1);
+        assert_eq!(repo.get_score("country2").await.unwrap(), 0);
+
+        // Change tile ownership
+        repo.update_country_index(1, "country2", Some("country1"));
+        assert_eq!(repo.get_score("country1").await.unwrap(), 0);
+        assert_eq!(repo.get_score("country2").await.unwrap(), 1);
+
+        repo.update_country_index(2, "country2", None);
+        repo.update_country_index(3, "country2", None);
+        assert_eq!(repo.get_score("country2").await.unwrap(), 3);
+
+        // Verify leaderboard
+        let leaderboard = repo.leaderboard().await.unwrap();
+
+        assert_eq!(leaderboard.get("country1"), None); // country1 should be removed as it has no tiles
+        assert_eq!(leaderboard.get("country2"), Some(&3));
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_updates() {
+        let repo = Arc::new(PapayaClickRepository::new());
+        let mut handles = vec![];
+
+        for i in 0..10 {
+            let repo = repo.clone();
+            let handle = tokio::spawn(async move {
+                repo.update_country_index(i, "country1", None);
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all updates to complete
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        assert_eq!(repo.get_score("country1").await.unwrap(), 10);
+
+        let mut handles = vec![];
+        for i in 0..10 {
+            let repo = repo.clone();
+            let handle = tokio::spawn(async move {
+                repo.update_country_index(i, "country2", Some("country1"));
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.await.unwrap();
+        }
+        let leaderboard = repo.leaderboard().await.unwrap();
+        println!("Leaderboard {:?}", leaderboard);
+
+        assert_eq!(repo.get_score("country1").await.unwrap(), 0);
+        assert_eq!(repo.get_score("country2").await.unwrap(), 10);
+
+        assert_eq!(leaderboard.get("country1"), None);
+        assert_eq!(leaderboard.get("country2"), Some(&10));
+    }
+
+    #[tokio::test]
+    async fn test_empty_country_removal() {
+        let repo = PapayaClickRepository::new();
+
+        // Add and remove tile from country1
+        repo.update_country_index(1, "country1", None);
+        assert_eq!(repo.get_score("country1").await.unwrap(), 1);
+
+        repo.update_country_index(1, "country2", Some("country1"));
+        assert_eq!(repo.get_score("country1").await.unwrap(), 0);
+
+        // Verify country1 is removed from leaderboard
+        let leaderboard = repo.leaderboard().await.unwrap();
+        assert!(!leaderboard.contains_key("country1"));
+        assert_eq!(leaderboard.get("country2"), Some(&1));
     }
 }

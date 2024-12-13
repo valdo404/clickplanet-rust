@@ -1,15 +1,13 @@
 use async_nats::{jetstream, ConnectError};
 use prost::Message;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use async_nats::jetstream::Context;
 use thiserror::Error;
 use tokio::sync::broadcast::Sender;
-use tracing::{field, info, instrument, Instrument, Span};
+use tracing::{info, instrument, warn, Span};
 use uuid::Uuid;
-use clickplanet_proto::clicks::{Click, UpdateNotification};
-use crate::nats_commons;
+use clickplanet_proto::clicks::{Click};
 use crate::nats_commons::{CLICK_STREAM_NAME, CLICK_SUBJECT_PREFIX};
 
 pub struct ClickService {
@@ -23,6 +21,8 @@ pub enum ClickServiceError {
     ConnectionError(#[from] ConnectError),  // Changed to specific ConnectError
     #[error("Failed to create stream: {0}")]
     StreamCreationError(String),
+    #[error("Nats ack error: {0}")]
+    NatsError(String)
 }
 
 pub async fn get_or_create_jet_stream(nats_url: &str) -> Result<Context, ClickServiceError> {
@@ -101,13 +101,19 @@ impl ClickService {
         click_data.encode(&mut click_bytes)?;
 
         let jetstream = self.jetstream.clone();
-        tokio::spawn(async move {
-            if let Err(e) = jetstream.publish(subject, click_bytes.into()).await {
-                tracing::error!("Failed to publish to jetstream: {}", e);
-            }
-        });
 
-        self.sender.send(click_data)?;
+        let result = jetstream.publish(subject, click_bytes.into())
+            .await
+            .map_err(|e| ClickServiceError::NatsError(e.to_string()));
+
+        if let Err(e) = result {
+            warn!("Failed to send click to nats channel (service might be shutting down): {:?}", e);
+        }
+
+        let send_error= self.sender.send(click_data);
+        if let Err(e) = send_error {
+            warn!("Failed to send click to in memory channel (service might be shutting down): {:?}", e);
+        }
 
         let publish_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
