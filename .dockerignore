@@ -1,0 +1,8 @@
+.dockerignore
+target/
+.idea/
+data/
+.git/
+node_modules/
+reverse-engineering/
+**/.DS_Store
