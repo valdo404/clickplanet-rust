@@ -1,6 +1,6 @@
 use std::time::Duration;
 use tracing::info;
-use crate::redis_click_persistence::{RedisClickRepository, RedisLeaderboardRepository};
+use crate::redis_click_persistence::{RedisClickRepository};
 
 mod jetstream_click_streamer;
 mod nats_commons;
@@ -17,7 +17,6 @@ use crate::telemetry::{init_telemetry, TelemetryConfig};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_telemetry(TelemetryConfig::default()).await?;
     let click_persister = RedisClickRepository::new("redis://localhost:6379").await?;
-    let leaderboard_persister = RedisLeaderboardRepository::new("redis://localhost:6379").await?;
 
     let consumer = ClickConsumer::new(
         "nats://localhost:4222",
@@ -26,8 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ack_wait: Duration::from_secs(10),
             ..Default::default()
         }),
-        click_persister,
-        leaderboard_persister
+        click_persister
     )
         .await?;
 

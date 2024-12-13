@@ -39,11 +39,11 @@ use tokio::task::JoinHandle;
 use clickplanet_proto::clicks::{Click, UpdateNotification};
 use clickplanet_proto::clicks::{LeaderboardResponse, LeaderboardEntry};
 
-use crate::click_persistence::{ClickRepository, LeaderboardRepository};
+use crate::click_persistence::{ClickRepository, LeaderboardRepository, LeaderboardOnClicks};
 use crate::in_memory_click_persistence::{PapayaClickRepository, PapayaLeaderboardRepository};
 use crate::nats_commons::ConsumerConfig;
 use crate::ownership_service::OwnershipUpdateService;
-use crate::redis_click_persistence::{RedisClickRepository, RedisLeaderboardRepository};
+use crate::redis_click_persistence::{RedisClickRepository};
 use crate::telemetry::{init_telemetry, TelemetryConfig};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -57,10 +57,10 @@ struct BatchRequestPayload {
 }
 
 #[derive(Clone)]
-struct AppState {
+struct AppState<T: ClickRepository + Send + Sync> {
     click_service: Arc<ClickService>,
-    click_repository: Arc<dyn ClickRepository>,
-    leaderboard_repository: Arc<dyn LeaderboardRepository>,
+    click_repository: Arc<T>,
+    leaderboard_repo: Arc<LeaderboardOnClicks<T>>,
     update_notifification_broadcaster: Arc<Sender<UpdateNotification>>,
     ownership_update_service: Arc<OwnershipUpdateService>,
 }
@@ -79,17 +79,16 @@ async fn run(nats_url: &str, redis_url: &str) -> Result<(), Box<dyn std::error::
     let click_sender_ref = Arc::new(click_sender);
 
     let (update_notification_sender, _) = broadcast::channel(1000);
-    let update_sender_ref = Arc::new(update_notification_sender);
+    let update_sender_ref: Arc<Sender<UpdateNotification>> = Arc::new(update_notification_sender);
 
     let cold_repository: Arc<RedisClickRepository> = Arc::new(RedisClickRepository::new(redis_url).await?);
-    let click_repository: Arc<PapayaClickRepository> = Arc::new(PapayaClickRepository::populate_with(cold_repository).await?);
-    let leaderboard_repository: Arc<RedisLeaderboardRepository> = Arc::new(RedisLeaderboardRepository::new(redis_url).await?);
+    let papaya_honey = PapayaClickRepository::populate_with(cold_repository).await?;
+    let click_repository: Arc<PapayaClickRepository> = Arc::new(papaya_honey.clone());
 
     let jetstream = Arc::new(get_or_create_jet_stream(nats_url).await?);
 
     let update_service = Arc::new(OwnershipUpdateService::new(
         click_repository.clone(),
-        leaderboard_repository.clone(),
         click_sender_ref.clone(),
         update_sender_ref.clone(),
         jetstream.clone(),
@@ -103,8 +102,7 @@ async fn run(nats_url: &str, redis_url: &str) -> Result<(), Box<dyn std::error::
     let state = AppState {
         click_service: Arc::new(ClickService::new(jetstream.clone(), click_sender_ref.clone()).await.unwrap()),
         click_repository: click_repository.clone(),
-        leaderboard_repository: leaderboard_repository.clone(),
-
+        leaderboard_repo: Arc::new(LeaderboardOnClicks(papaya_honey)),
         update_notifification_broadcaster: update_sender_ref.clone(),
         ownership_update_service: update_service.clone(),
     };
@@ -149,8 +147,8 @@ async fn run(nats_url: &str, redis_url: &str) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
-async fn handle_click(
-    State(state): State<AppState>,
+async fn handle_click<T: ClickRepository>(
+    State(state): State<AppState<T>>,
     Json(payload): Json<ClickPayload>,
 ) -> Result<impl IntoResponse, StatusCode> {
     let click_request = clickplanet_proto::clicks::ClickRequest::decode(Bytes::from(payload.data))
@@ -176,8 +174,8 @@ async fn handle_click(
     Ok(axum::Json(serde_json::json!({})))
 }
 
-async fn handle_get_ownerships(
-    State(state): State<AppState>,
+async fn handle_get_ownerships<T: ClickRepository>(
+    State(state): State<AppState<T>>,
 ) -> Result<Json<Value>, StatusCode> {
     let response = tokio::time::timeout(
         Duration::from_secs(5),
@@ -208,9 +206,8 @@ async fn handle_get_ownerships(
     Ok(axum::Json(payload))
 }
 
-
-async fn handle_get_ownerships_by_batch(
-    State(state): State<AppState>,
+async fn handle_get_ownerships_by_batch<T: ClickRepository>(
+    State(state): State<AppState<T>>,
     Json(payload): Json<BatchRequestPayload>,
 ) -> Result<Json<Value>, StatusCode> {
     let batch_request = clickplanet_proto::clicks::BatchRequest::decode(Bytes::from(payload.data))
@@ -249,13 +246,14 @@ async fn handle_get_ownerships_by_batch(
 }
 
 
-async fn handle_ws_upgrade(
+async fn handle_ws_upgrade<T: ClickRepository+ 'static>(
     ws: WebSocketUpgrade,
-    State(state): State<AppState>,
+    State(state): State<AppState<T>>,
 ) -> impl IntoResponse {
     ws.on_upgrade(|socket| handle_ws_connection(socket, state))
 }
-async fn handle_ws_connection(socket: WebSocket, state: AppState) {
+
+async fn handle_ws_connection<T: ClickRepository>(socket: WebSocket, state: AppState<T>) {
     let (sender, mut receiver) = socket.split();
     let sender_arc = Arc::new(Mutex::new(sender));
 
@@ -292,19 +290,18 @@ async fn handle_ws_connection(socket: WebSocket, state: AppState) {
         }
     });
 
-    // Wait for either task to complete
     tokio::select! {
         _ = &mut send_task => recv_task.abort(),
         _ = &mut recv_task => send_task.abort(),
     }
 }
 
-async fn handle_get_leaderboard(
-    State(state): State<AppState>,
+async fn handle_get_leaderboard<T: ClickRepository>(
+    State(state): State<AppState<T>>,
 ) -> Result<Json<Value>, StatusCode> {
     let leaderboard_data = tokio::time::timeout(
         Duration::from_secs(5),
-        state.leaderboard_repository.leaderboard(),
+        state.leaderboard_repo.leaderboard(),
     )
         .await
         .map_err(|e| {

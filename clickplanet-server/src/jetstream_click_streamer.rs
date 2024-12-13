@@ -5,7 +5,7 @@ use prost::Message;
 use std::sync::Arc;
 use tracing::{error, info};
 use crate::click_persistence::{ClickRepository, LeaderboardRepository};
-use crate::redis_click_persistence::{RedisClickRepository, RedisLeaderboardRepository};
+use crate::redis_click_persistence::{RedisClickRepository};
 use crate::nats_commons;
 use crate::nats_commons::{get_stream, ConsumerConfig, PollingConsumerError};
 
@@ -16,21 +16,18 @@ pub struct ClickConsumer {
     jetstream: Arc<jetstream::Context>,
     consumer_config: ConsumerConfig,
     click_repository: Arc<dyn ClickRepository>,
-    leaderboard_repository: Arc<dyn LeaderboardRepository>,
 }
 
 impl ClickConsumer {
     pub async fn new(nats_url: &str, consumer_config: Option<ConsumerConfig>,
-                     redis_click_repository: RedisClickRepository,
-                     redis_leaderboard_repository: RedisLeaderboardRepository) -> Result<Self, PollingConsumerError> {
+                     redis_click_repository: RedisClickRepository) -> Result<Self, PollingConsumerError> {
         let client = async_nats::connect(nats_url).await?;
         let jetstream = async_nats::jetstream::new(client);
 
         Ok(Self {
             jetstream: Arc::new(jetstream),
             consumer_config: consumer_config.unwrap_or_default(),
-            click_repository: Arc::new(redis_click_repository),
-            leaderboard_repository: Arc::new(redis_leaderboard_repository),
+            click_repository: Arc::new(redis_click_repository)
         })
     }
 
@@ -96,20 +93,7 @@ impl ClickConsumer {
             .ok_or_else(|| PollingConsumerError::Processing("Invalid subject format".to_string()))?;
         let click: Click = clickplanet_proto::clicks::Click::decode(message.payload.clone())?;
 
-        let possible_ownership = self.click_repository.save_click(tile_id, &click).await?;
-
-        if let Some(last_ownership) = possible_ownership {
-            // Only process ownership change if the country_id is different
-            if last_ownership.country_id != click.country_id {
-                let notification = UpdateNotification {
-                    tile_id: tile_id.try_into().unwrap(),
-                    previous_country_id: last_ownership.country_id,
-                    country_id: click.country_id,
-                };
-
-                self.leaderboard_repository.process_ownership_change(&notification).await?;
-            }
-        }
+        self.click_repository.save_click(tile_id, &click).await?;
 
         message
             .ack()

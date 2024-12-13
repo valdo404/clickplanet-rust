@@ -1,16 +1,18 @@
+use crate::click_persistence::{ClickRepository, ClickRepositoryError};
+use crate::click_persistence::{LeaderboardError, LeaderboardRepository};
+use async_trait::async_trait;
+use clickplanet_proto::clicks::UpdateNotification;
+use clickplanet_proto::clicks::{Click, Ownership, OwnershipState};
+use deadpool_redis::redis::AsyncCommands;
 use deadpool_redis::{redis, Config as RedisConfig, CreatePoolError, PoolError, Runtime};
+use log::error;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use clickplanet_proto::clicks::{Click, Ownership, OwnershipState};
-use tracing::{debug, info, instrument, Span};
-use deadpool_redis::redis::AsyncCommands;
+
+use crate::in_memory_click_persistence::PapayaClickRepository;
 use thiserror::Error;
-use std::collections::HashMap;
-use async_trait::async_trait;
-use log::error;
-use clickplanet_proto::clicks::UpdateNotification;
-use crate::click_persistence::{LeaderboardRepository, LeaderboardError};
-use crate::click_persistence::{ClickRepository, ClickRepositoryError};
+use tracing::{debug, info, instrument, Span};
 
 const TILES_KEY: &str = "tiles";
 
@@ -271,130 +273,167 @@ impl ClickRepository for RedisClickRepository {
 }
 
 
-const LEADERBOARD_KEY: &str = "leaderboard";
 
-#[derive(Error, Debug)]
-pub enum RedisLeaderboardError {
-    #[error("Redis error: {0}")]
-    Redis(#[from] deadpool_redis::redis::RedisError),
-    #[error("Redis pool error: {0}")]
-    RedisPool(#[from] PoolError),
-    #[error("Redis create pool error: {0}")]
-    CreateRedisPool(#[from] CreatePoolError),
-}
+#[cfg(test)]
+mod click_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers::*;
+    use testcontainers_modules::redis::{Redis, REDIS_PORT};
 
-impl From<RedisLeaderboardError> for LeaderboardError {
-    fn from(err: RedisLeaderboardError) -> Self {
-        LeaderboardError::StorageError(err.to_string())
-    }
-}
+    async fn create_test_repo() -> (RedisClickRepository, ContainerAsync<Redis>) {
+        let redis_instance = Redis::default()
+            .start().await.unwrap();
+        let host_ip = redis_instance.get_host().await.unwrap();
+        let host_port: u16 = redis_instance.get_host_port_ipv4(REDIS_PORT).await.unwrap();
+        println!("Host {} port {} & instance {}", host_ip, host_port, redis_instance.id());
+        let redis_url = format!("redis://localhost:{}", host_port);
+        let repo = RedisClickRepository::new(&redis_url).await.unwrap();
+        println!("Created repo for {}", redis_url);
 
-pub struct RedisLeaderboardRepository {
-    redis_pool: Arc<deadpool_redis::Pool>,
-}
-
-impl RedisLeaderboardRepository {
-    pub async fn new(redis_url: &str) -> Result<Self, RedisLeaderboardError> {
-        let redis_cfg = RedisConfig::from_url(redis_url);
-        let redis_pool = redis_cfg.create_pool(Some(Runtime::Tokio1))?;
-
-        Ok(Self {
-            redis_pool: Arc::new(redis_pool),
-        })
-    }
-}
-
-#[async_trait]
-impl LeaderboardRepository for RedisLeaderboardRepository {
-    async fn increment_score(&self, country_id: &str) -> Result<(), LeaderboardError> {
-        let mut redis_conn = self.redis_pool.get().await.map_err(RedisLeaderboardError::from)?;
-
-        redis_conn
-            .zincr(LEADERBOARD_KEY, country_id, 1)
-            .await
-            .map_err(RedisLeaderboardError::from)?;
-
-        Ok(())
+        (repo, redis_instance)
     }
 
-    async fn decrement_score(&self, country_id: &str) -> Result<(), LeaderboardError> {
-        let mut redis_conn = self.redis_pool.get().await.map_err(RedisLeaderboardError::from)?;
+    fn create_test_click(tile_id: u32, country_id: &str) -> Click {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
 
-        // Get current score
-        let current_score: Option<u32> = redis_conn
-            .zscore(LEADERBOARD_KEY, country_id)
-            .await
-            .map_err(RedisLeaderboardError::from)?;
+        Click {
+            tile_id: tile_id as i32,
+            country_id: country_id.to_string(),
+            timestamp_ns: now,
+            click_id: format!("test_click_{}", tile_id),
+        }
+    }
 
-        // Only decrement if score exists and is greater than 0
-        if let Some(score) = current_score {
-            if score > 0 {
-                redis_conn
-                    .zincr(LEADERBOARD_KEY, country_id, -1)
-                    .await
-                    .map_err(RedisLeaderboardError::from)?;
+    #[tokio::test]
+    async fn test_save_and_get_tile() {
+        let (repo, _container) = create_test_repo().await;
+
+        // Test saving new ownership
+        let click = create_test_click(1, "country1");
+        let ownership = repo.save_click(1, &click).await.unwrap();
+
+        assert!(ownership.is_none());
+
+        // Test getting saved tile
+        let fetched = repo.get_tile(1).await.unwrap();
+        assert!(fetched.is_some());
+        let fetched_ownership = fetched.unwrap();
+        assert_eq!(fetched_ownership.tile_id, 1);
+        assert_eq!(fetched_ownership.country_id, "country1");
+    }
+
+    #[tokio::test]
+    async fn test_get_ownerships() {
+        let (repo, _container) = create_test_repo().await;
+
+        for i in 0..5 {
+            let click = create_test_click(i, &format!("country{}", i % 2));
+            repo.save_click(i, &click).await.unwrap();
+        }
+
+        // Get all ownerships
+        let state = repo.get_ownerships().await.unwrap();
+        assert_eq!(state.ownerships.len(), 5);
+
+        // Verify ownerships
+        let mut country0_count = 0;
+        let mut country1_count = 0;
+
+        for ownership in state.ownerships {
+            match ownership.country_id.as_str() {
+                "country0" => country0_count += 1,
+                "country1" => country1_count += 1,
+                _ => panic!("Unexpected country_id"),
             }
         }
 
-        Ok(())
+        assert_eq!(country0_count, 3); // tiles 0, 2, 4
+        assert_eq!(country1_count, 2); // tiles 1, 3
     }
 
-    async fn get_score(&self, country_id: &str) -> Result<u32, LeaderboardError> {
-        let mut redis_conn = self.redis_pool.get().await.map_err(RedisLeaderboardError::from)?;
+    #[tokio::test]
+    async fn test_get_ownerships_by_batch() {
+        let (repo, _container) = create_test_repo().await;
 
-        let score: Option<u32> = redis_conn
-            .zscore(LEADERBOARD_KEY, country_id)
-            .await
-            .map_err(RedisLeaderboardError::from)?;
-
-        Ok(score.unwrap_or(0))
-    }
-
-    async fn process_ownership_change(
-        &self,
-        update: &UpdateNotification,
-    ) -> Result<(), LeaderboardError> {
-        let mut redis_conn = self.redis_pool.get().await.map_err(RedisLeaderboardError::from)?;
-
-        let mut pipe = redis::pipe();
-
-        // Decrement previous owner's score if it exists
-        if !update.previous_country_id.is_empty() {
-            let current_score: Option<u32> = redis_conn
-                .zscore(LEADERBOARD_KEY, &update.previous_country_id)
-                .await
-                .map_err(RedisLeaderboardError::from)?;
-
-            error!("Current score for {:?}, {:?}", current_score, update);
-
-            if let Some(score) = current_score {
-                if score > 0 {
-                    pipe.zincr(LEADERBOARD_KEY, &update.previous_country_id, -1);
-                }
-            }
+        // Save tiles 0-9
+        for i in 0..10 {
+            let click = create_test_click(i, &format!("country{}", i % 3));
+            repo.save_click(i, &click).await.unwrap();
         }
 
-        pipe.zincr(LEADERBOARD_KEY, &update.country_id, 1);
-        pipe.query_async(&mut redis_conn)
-            .await
-            .map_err(RedisLeaderboardError::from)?;
+        // Test batch retrieval
+        let batch = repo.get_ownerships_by_batch(2, 6).await.unwrap();
+        assert_eq!(batch.ownerships.len(), 5); // tiles 2,3,4,5,6
 
-        Ok(())
+        // Verify batch contents
+        for ownership in batch.ownerships {
+            assert!(ownership.tile_id >= 2 && ownership.tile_id <= 6);
+            assert_eq!(ownership.country_id, format!("country{}", ownership.tile_id % 3));
+        }
     }
 
-    async fn leaderboard(&self) -> Result<HashMap<String, u32>, LeaderboardError> {
-        let mut redis_conn = self.redis_pool.get().await.map_err(RedisLeaderboardError::from)?;
+    #[tokio::test]
+    async fn test_ownership_updates() {
+        let (repo, _container) = create_test_repo().await;
 
-        let scores: Vec<(String, f64)> = redis_conn
-            .zrange_withscores(LEADERBOARD_KEY, 0, -1)
-            .await
-            .map_err(RedisLeaderboardError::from)?;
+        let click1 = create_test_click(1, "country1");
+        let ownership1 = repo.save_click(1, &click1).await.unwrap();
+        assert_eq!(ownership1, None);
 
-        let result = scores
-            .into_iter()
-            .map(|(country_id, score)| (country_id, score as u32))
+        let click2 = create_test_click(1, "country2");
+        let ownership2 = repo.save_click(1, &click2).await.unwrap().unwrap();
+        assert_eq!(ownership2.country_id, "country1");
+
+        // Verify latest ownership
+        let current = repo.get_tile(1).await.unwrap().unwrap();
+        assert_eq!(current.country_id, "country2");
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_clicks() {
+        let (repo, _container) = create_test_repo().await;
+        let repo = Arc::new(repo);
+
+        let handles: Vec<_> = (0..10)
+            .map(|i| {
+                let repo = repo.clone();
+                tokio::spawn(async move {
+                    let click = create_test_click(1, &format!("country{}", i));
+                    repo.save_click(1, &click).await.unwrap();
+                })
+            })
             .collect();
 
-        Ok(result)
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        // Verify only one ownership exists for the tile
+        let ownership = repo.get_tile(1).await.unwrap();
+        assert!(ownership.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_error_handling() {
+        let (repo, container) = create_test_repo().await;
+
+        // Initial successful operation
+        let click = create_test_click(1, "country1");
+        repo.save_click(1, &click).await.unwrap();
+
+        // Stop Redis
+        container.stop().await.unwrap();
+
+        // Operations should fail after stopping Redis
+        let click = create_test_click(2, "country2");
+        assert!(repo.save_click(2, &click).await.is_err());
+        assert!(repo.get_tile(1).await.is_err());
+        assert!(repo.get_ownerships().await.is_err());
+        assert!(repo.get_ownerships_by_batch(1, 5).await.is_err());
     }
 }

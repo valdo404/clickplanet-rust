@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use papaya::HashMap as PapayaMap;
 use async_trait::async_trait;
-use clickplanet_proto::clicks::{Click, Ownership, OwnershipState, UpdateNotification};
-use crate::click_persistence::{ClickRepository, ClickRepositoryError, LeaderboardError, LeaderboardRepository};
+use clickplanet_proto::clicks::{Click, Ownership, OwnershipState};
+use crate::click_persistence::{ClickRepository, ClickRepositoryError, LeaderboardRepository};
 
 #[derive(Debug, Clone)]
 pub struct TileData {
@@ -11,6 +11,7 @@ pub struct TileData {
     pub timestamp_ns: u64,
 }
 
+#[derive(Clone)]
 pub struct PapayaClickRepository {
     tiles: Arc<PapayaMap<u32, TileData>>,
 }
@@ -121,7 +122,6 @@ impl ClickRepository for PapayaClickRepository {
     }
 }
 
-
 pub struct PapayaLeaderboardRepository {
     scores: Arc<PapayaMap<String, u32>>,
 }
@@ -140,63 +140,14 @@ impl Default for PapayaLeaderboardRepository {
     }
 }
 
-#[async_trait]
-impl LeaderboardRepository for PapayaLeaderboardRepository {
-    async fn increment_score(&self, country_id: &str) -> Result<(), LeaderboardError> {
-        let scores = self.scores.pin();
-        scores.update_or_insert(country_id.to_string(), |current| current + 1, 0);
-        Ok(())
-    }
-
-    async fn decrement_score(&self, country_id: &str) -> Result<(), LeaderboardError> {
-        let scores = self.scores.pin();
-        scores.update_or_insert(country_id.to_string(), |current| {
-            if *current == 0 {
-                0
-            } else {
-                current.saturating_sub(1)
-            }
-        }, 0);
-        Ok(())
-    }
-
-    async fn get_score(&self, country_id: &str) -> Result<u32, LeaderboardError> {
-        let scores = self.scores.pin();
-
-        Ok(*scores.get(country_id).unwrap_or(&0))
-    }
-
-    async fn process_ownership_change(
-        &self,
-        update_notification: &UpdateNotification,
-    ) -> Result<(), LeaderboardError> {
-        if !update_notification.previous_country_id.is_empty() {
-            self.decrement_score(&update_notification.previous_country_id).await?;
-        }
-
-        self.increment_score(&update_notification.country_id).await?;
-
-        Ok(())
-    }
-
-    async fn leaderboard(&self) -> Result<std::collections::HashMap<String, u32>, LeaderboardError> {
-        let scores = self.scores.pin();
-        let mut result = std::collections::HashMap::new();
-
-        scores.iter().for_each(|(country_id, score)| {
-            result.insert(country_id.clone(), *score);
-        });
-
-        Ok(result)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use uuid::{uuid, Uuid};
     use clickplanet_proto::clicks::UpdateNotification;
+    use crate::click_persistence::LeaderboardOnClicks;
 
     #[tokio::test]
     async fn test_concurrent_updates() {
@@ -235,58 +186,51 @@ mod tests {
 
     #[tokio::test]
     async fn test_leaderboard_accuracy() {
-        let leaderboard_repo = Arc::new(PapayaLeaderboardRepository::new());
-
+        let repository = PapayaClickRepository::new();
+        let click_repo = Arc::new(repository.clone());
         let mut leaderboard_handles = Vec::new();
 
         for i in 0..10 {
-            let leaderboard_repo = leaderboard_repo.clone(); // Clone for each task
+            let repo = click_repo.clone();  // Clone the Arc before moving into spawn
             let handle = tokio::spawn(async move {
-                let update = UpdateNotification {
+                let click = Click {
                     tile_id: i,
                     country_id: format!("COUNTRY{}", i % 2),
-                    previous_country_id: format!("COUNTRY{}", i % 2 + 1),
+                    timestamp_ns: (10 + i * 10) as u64,
+                    click_id: Uuid::new_v4().to_string(),
                 };
-                println!(
-                    "Processing update: {:?} -> {:?}",
-                    update.previous_country_id, update.country_id
-                );
 
-                leaderboard_repo.process_ownership_change(&update).await
+                println!("Processing click: {:?}", click);
+                repo.save_click(click.tile_id as u32, &click).await
             });
 
             leaderboard_handles.push(handle);
         }
 
+        // Wait for all clicks to be processed
         for handle in leaderboard_handles {
             handle.await.unwrap().unwrap();
         }
 
+        // Create leaderboard computation after all clicks are processed
+        let leader_board_computation = LeaderboardOnClicks(repository);
 
-        // Now we can use the original repo reference
+        // Check scores
+        let score0 = leader_board_computation.get_score("COUNTRY0").await.unwrap();
+        let score1 = leader_board_computation.get_score("COUNTRY1").await.unwrap();
+        let score2 = leader_board_computation.get_score("COUNTRY2").await.unwrap();
 
-        let score0 = leaderboard_repo.get_score("COUNTRY0").await.unwrap();
-        let score1 = leaderboard_repo.get_score("COUNTRY1").await.unwrap();
-        let score2 = leaderboard_repo.get_score("COUNTRY2").await.unwrap();
+        // Get and verify leaderboard
+        let leaderboard = leader_board_computation.leaderboard().await.unwrap();
 
-        let leaderboard: HashMap<String, u32> = leaderboard_repo.leaderboard().await.unwrap();
-
-        let map = {
+        let expected_map = {
             let mut map = HashMap::new();
-            map.insert(
-                "COUNTRY0".to_string(), 4
-            );
-            map.insert(
-                "COUNTRY1".to_string(), 0
-            );
-            map.insert(
-                "COUNTRY2".to_string(), 0
-            );
+            map.insert("COUNTRY0".to_string(), 5);
+            map.insert("COUNTRY1".to_string(), 5);
             map
         };
 
-        assert_eq!(leaderboard, map);
-
-        assert_eq!(score0 + score1 + score2, 5);
+        assert_eq!(leaderboard, expected_map);
+        assert_eq!(score0 + score1 + score2, 10);
     }
 }

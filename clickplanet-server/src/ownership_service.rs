@@ -10,7 +10,7 @@ use thiserror::Error;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::Receiver;
 use tokio::task::JoinHandle;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::click_persistence::{ClickRepository, LeaderboardRepository};
 use crate::nats_commons;
@@ -38,7 +38,6 @@ pub enum ConsumerError {
 #[derive(Clone)]
 pub struct OwnershipUpdateService {
     click_repository: Arc<dyn ClickRepository>,
-    leaderboard_repository: Arc<dyn LeaderboardRepository>,
     click_sender: Arc<broadcast::Sender<Click>>,
     update_tx: Arc<broadcast::Sender<UpdateNotification>>,
     jetstream: Arc<jetstream::Context>,
@@ -48,7 +47,6 @@ pub struct OwnershipUpdateService {
 impl OwnershipUpdateService {
     pub fn new(
         click_repository: Arc<dyn ClickRepository>,
-        leaderboard_repository: Arc<dyn LeaderboardRepository>,
         click_sender: Arc<broadcast::Sender<Click>>,
         update_sender: Arc<broadcast::Sender<UpdateNotification>>,
         jetstream: Arc<jetstream::Context>,
@@ -56,7 +54,6 @@ impl OwnershipUpdateService {
     ) -> Self {
         Self {
             click_repository,
-            leaderboard_repository,
             click_sender,
             update_tx: update_sender,
             jetstream,
@@ -117,13 +114,35 @@ impl OwnershipUpdateService {
             }
         })
     }
+
     async fn launch_nats_consumer(self, mut stream: Stream) -> JoinHandle<()> {
         tokio::spawn(async move {
-            let forever = std::future::pending::<()>();
-            forever.await
+            loop {
+                match stream.next().await {
+                    Some(Ok(message)) => {
+                        let msg_subject = message.subject.clone();
+
+                        match self.handle_nats_message(message).await {
+                            Ok(_) => {
+                                info!("Successfully processed NATS message - Subject: {}", msg_subject);
+                            }
+                            Err(e) => {
+                                error!("Failed to process NATS message - Subject: {} - Error: {:?}",
+                                msg_subject, e);
+                            }
+                        }
+                    }
+                    Some(Err(e)) => {
+                        error!("Error receiving NATS message: {:?}", e);
+                    }
+                    None => {
+                        warn!("NATS stream ended");
+                        break;
+                    }
+                }
+            }
         })
     }
-
     
     async fn handle_nats_message(&self, message: jetstream::Message) -> Result<(), ConsumerError> {
         let click: Click = clickplanet_proto::clicks::Click::decode(message.payload.clone())?;
@@ -175,8 +194,6 @@ impl OwnershipUpdateService {
                     previous_country_id: last_ownership.country_id,
                     country_id: click.country_id,
                 };
-
-                self.leaderboard_repository.process_ownership_change(&notification).await?;
 
                 let result = self.update_tx.send(notification);
                 if let Err(e) = result {

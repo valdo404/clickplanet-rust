@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use axum::async_trait;
 use thiserror::Error;
 use clickplanet_proto::clicks::{Click, Ownership, OwnershipState, UpdateNotification};
@@ -35,13 +36,38 @@ pub enum LeaderboardError {
 
 #[async_trait]
 pub trait LeaderboardRepository: Send + Sync {
-    async fn increment_score(&self, country_id: &str) -> Result<(), LeaderboardError>;
-    async fn decrement_score(&self, country_id: &str) -> Result<(), LeaderboardError>;
     async fn get_score(&self, country_id: &str) -> Result<u32, LeaderboardError>;
-    async fn process_ownership_change(
-        &self,
-        update_notification: &UpdateNotification,
-    ) -> Result<(), LeaderboardError>;
     async fn leaderboard(&self) -> Result<std::collections::HashMap<String, u32>, LeaderboardError>;
+}
 
+pub struct LeaderboardOnClicks<T: ClickRepository>(pub T);
+
+#[async_trait]
+impl<T: ClickRepository + Send + Sync> LeaderboardRepository for LeaderboardOnClicks<T> {
+    async fn get_score(&self, country_id: &str) -> Result<u32, LeaderboardError> {
+        let ownership_state = self.0.get_ownerships()
+            .await
+            .map_err(|e| LeaderboardError::StorageError(e.to_string()))?;
+
+        let score = ownership_state.ownerships
+            .iter()
+            .filter(|ownership| ownership.country_id == country_id)
+            .count() as u32;
+
+        Ok(score)
+    }
+
+    async fn leaderboard(&self) -> Result<HashMap<String, u32>, LeaderboardError> {
+        let ownership_state = self.0.get_ownerships()
+            .await
+            .map_err(|e| LeaderboardError::StorageError(e.to_string()))?;
+
+        let mut scores: HashMap<String, u32> = HashMap::new();
+
+        for ownership in ownership_state.ownerships {
+            *scores.entry(ownership.country_id).or_insert(0) += 1;
+        }
+
+        Ok(scores)
+    }
 }
