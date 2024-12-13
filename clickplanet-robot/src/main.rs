@@ -17,19 +17,21 @@ use clickplanet_client::ClickPlanetRestClient;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Target country code (e.g., "fr", "de")
     #[arg(long, default_value = "fr")]
     target_country: String,
 
-    /// Wanted country code (e.g., "fr", "de")
     #[arg(long, default_value = "fr")]
     wanted_country: String,
 
-    /// Server hostname
     #[arg(long, default_value = "clickplanet.lol")]
-    click_planet_host: String,
+    host: String,
 
-    /// Path to coordinates file
+    #[arg(long, default_value = "443")]
+    port: u16,
+
+    #[arg(long, default_value = "false")]
+    unsecure: bool,
+
     #[arg(long, default_value = "coordinates.json")]
     coordinates_file: String,
 
@@ -49,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let geolookup: GeoLookup = GeoLookup::from_file(&args.geojson_file)?;
 
     let country_tile_map = CountryTilesMap::load_or_build(&geolookup, &index_coordinates)?;
-    let client = ClickPlanetRestClient::new(&args.click_planet_host);
+    let client = ClickPlanetRestClient::new(&args.host, args.port, !args.unsecure);
 
     println!("Initializing watchguard for {} -> {}", args.target_country, args.wanted_country);
 

@@ -53,15 +53,19 @@ struct OwnershipResponse {
 }
 
 pub struct ClickPlanetRestClient {
-    base_url: String,
+    host: String,
+    port: u16,
+    secure: bool,
 }
 
 pub const CLIENT_NAME: &'static str = "clickplanet client owned by valdo404";
 
 impl ClickPlanetRestClient {
-    pub fn new(base_url: &str) -> Self {
+    pub fn new(base_url: &str, port: u16, secure: bool) -> Self {
         Self {
-            base_url: base_url.to_string(),
+            host: base_url.to_string(),
+            port,
+            secure: secure,
         }
     }
 
@@ -76,7 +80,7 @@ impl ClickPlanetRestClient {
         request.encode(&mut proto_bytes)?;
 
         let client = reqwest::Client::new();
-        let base_url = self.base_url.clone();
+        let base_url = self.host.clone();
 
         // Configure the retry strategy
         let retry_strategy = ExponentialBackoff::from_millis(100)
@@ -86,7 +90,7 @@ impl ClickPlanetRestClient {
 
         let result = Retry::spawn(retry_strategy, || async {
             let response = client
-                .post(format!("https://{}/api/click", base_url))
+                .post(format!("{}://{}:{}/api/click", if self.secure { "https" } else { "http" }, base_url, self.port))
                 .header("User-Agent", CLIENT_NAME)
                 .header("Content-Type", "application/json")
                 .header("Origin", format!("https://{}", base_url))
@@ -128,11 +132,11 @@ impl ClickPlanetRestClient {
         });
 
         let response = client
-            .post(format!("https://{}/api/ownerships-by-batch", self.base_url))
+            .post(format!("{}://{}:{}/api/ownerships-by-batch", if self.secure { "https" } else { "http" }, self.host, self.port))
             .header("User-Agent", CLIENT_NAME)
             .header("Content-Type", "application/json")
-            .header("Origin", format!("https://{}", self.base_url))
-            .header("Referer", format!("https://{}/", self.base_url))
+            .header("Origin", format!("https://{}", self.host))
+            .header("Referer", format!("https://{}/", self.host))
             .json(&payload)
             .send()
             .await
@@ -157,6 +161,7 @@ impl ClickPlanetRestClient {
 
         let ownership_state = clicks::OwnershipState::decode(&proto_bytes[..])
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+
 
         Ok(ownership_state)
     }
@@ -224,14 +229,15 @@ impl ClickPlanetRestClient {
             .map(jitter);
 
         let result = Retry::spawn(retry_strategy, || async {
-            let ws_url = format!("wss://{}/ws/listen", self.base_url);
+            let ws_url = format!("{}://{}:{}/ws/listen", if self.secure { "wss" } else { "ws" }, self.host, self.port);
+
             let url = Url::parse(&ws_url).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
             let request = Request::builder()
                 .uri(url.as_str())
                 .header("User-Agent", CLIENT_NAME)
-                .header("Origin", format!("https://{}", self.base_url))
-                .header("Host", self.base_url.clone())
+                .header("Origin", format!("{}://{}:{}", if self.secure { "https" } else { "http" }, self.host, self.port))
+                .header("Host", self.host.clone())
                 .header("Connection", "Upgrade")
                 .header("Upgrade", "websocket")
                 .header("Sec-WebSocket-Version", "13")
