@@ -1,20 +1,44 @@
-use std::sync::Arc;
 use async_nats::jetstream;
+use async_nats::jetstream::consumer::pull::Stream;
+use clickplanet_proto::clicks::{Click, Ownership, UpdateNotification};
+use futures_util::stream::Map;
 use futures_util::{future, StreamExt};
 use prost::Message;
+use std::error::Error;
+use std::sync::Arc;
+use thiserror::Error;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::Receiver;
-use tracing::error;
-use clickplanet_proto::clicks::{Click, UpdateNotification, Ownership};
-use crate::click_persistence::ClickRepository;
+use tokio::task::JoinHandle;
+use tracing::{error, warn};
+
+use crate::click_persistence::{ClickRepository, LeaderboardRepository};
 use crate::nats_commons;
 use crate::nats_commons::{get_stream, ConsumerConfig, PollingConsumerError};
 use crate::redis_click_persistence::{RedisClickRepository, RedisPersistenceError};
 
 const CONSUMER_NAME: &'static str = "tile-ownership-update";
 
+#[derive(Error, Debug)]
+pub enum ConsumerError {
+    #[error("NATS consumer error: {0}")]
+    NatsError(String),
+    #[error("Failed to decode message: {0}")]
+    DecodeError(#[from] prost::DecodeError),
+    #[error("Processing error: {0}")]
+    ProcessingError(String),
+    #[error("Message acknowledgment failed: {0}")]
+    AckError(String),
+    #[error("Stream error: {0}")]
+    StreamError(String),
+    #[error("Polling error: {0}")]
+    PollingConsumerError(#[from] PollingConsumerError),
+}
+
+#[derive(Clone)]
 pub struct OwnershipUpdateService {
-    click_persistence: Arc<dyn ClickRepository>,
+    click_repository: Arc<dyn ClickRepository>,
+    leaderboard_repository: Arc<dyn LeaderboardRepository>,
     click_sender: Arc<broadcast::Sender<Click>>,
     update_tx: Arc<broadcast::Sender<UpdateNotification>>,
     jetstream: Arc<jetstream::Context>,
@@ -23,14 +47,16 @@ pub struct OwnershipUpdateService {
 
 impl OwnershipUpdateService {
     pub fn new(
-        click_persistence: Arc<RedisClickRepository>,
+        click_repository: Arc<dyn ClickRepository>,
+        leaderboard_repository: Arc<dyn LeaderboardRepository>,
         click_sender: Arc<broadcast::Sender<Click>>,
         update_sender: Arc<broadcast::Sender<UpdateNotification>>,
         jetstream: Arc<jetstream::Context>,
         consumer_config: Option<ConsumerConfig>,
     ) -> Self {
         Self {
-            click_persistence,
+            click_repository,
+            leaderboard_repository,
             click_sender,
             update_tx: update_sender,
             jetstream,
@@ -38,64 +64,77 @@ impl OwnershipUpdateService {
         }
     }
 
-    pub async fn run(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // let mut click_rx = self.click_sender.subscribe();
+    pub async fn run(&self) -> Result<(), ConsumerError> {
+        let click_rx = self.click_sender.subscribe();
+        let nats_consumer: Stream = self.create_consumer().await?;
+        let self_arc = Arc::new(self.clone());
 
-        let nats_consumer = self.create_consumer().await?;
-        nats_consumer
-            .map(|message_result| {
-                let this = self.clone();
-                async move {
-                    match message_result {
-                        Ok(msg) => {
-                            if let Err(e) = this.handle_nats_message(msg).await {
-                                error!("Error processing NATS message: {}", e);
-                            }
-                        }
-                        Err(e) => error!("Error receiving NATS message: {}", e),
-                    }
+        let nats_handle: JoinHandle<()> = self.clone().launch_nats_consumer(nats_consumer).await;
+        let click_handle: JoinHandle<()> = self_arc.launch_direct_consumer(click_rx);
+
+        tokio::select! {
+            result = nats_handle => {
+                if let Err(e) = result {
+                    error!("NATS processing task failed: {:?}", e);
+                } else {
+                    error!("Unexpected NATS exit");
                 }
-            })
-            .buffer_unordered(self.consumer_config.concurrent_processors)
-            .for_each(|_| future::ready(()))
-            .await;
-
-        // loop {
-        //     tokio::select! {
-        //         result = click_rx.recv() => {
-        //             match result {
-        //                 Ok(click) => {
-        //                     if let Err(e) = self.process_click(click).await {
-        //                         error!("Error processing broadcast click: {:?}", e);
-        //                     }
-        //                 }
-        //                 Err(e) => {
-        //                     error!("Error receiving broadcast message: {:?}", e);
-        //                     break;
-        //                 }
-        //             }
-        //         }
-        //         Some(_) = nats_stream.next() => {
-        //             continue;
-        //         }
-        //         else => break,
-        //     }
-        // }
+            }
+            result = click_handle => {
+                if let Err(e) = result {
+                    error!("Click processing task failed: {:?}", e);
+                } else {
+                    error!("Unexpected click handle exit");
+                }
+            }
+        }
 
         Ok(())
     }
 
-    async fn handle_nats_message(&self, message: jetstream::Message) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let subject = message.subject.as_str();
+    fn launch_direct_consumer(self: Arc<Self>, click_rx: broadcast::Receiver<Click>) -> JoinHandle<()> {
+        tokio::spawn({
+            let this = self;
+            let config = this.consumer_config.concurrent_processors;  // Get the config value before the move
+            async move {
+                futures::stream::unfold(click_rx, |mut rx| async {
+                    match rx.recv().await {
+                        Ok(click) => Some((click, rx)),
+                        Err(_) => None,
+                    }
+                })
+                    .map(move |click| {
+                        let this = this.clone();
+                        async move {
+                            if let Err(e) = this.process_click(click).await {
+                                error!("Error processing broadcast click: {:?}", e);
+                            }
+                        }
+                    })
+                    .buffer_unordered(config)  // Use the config value we captured earlier
+                    .for_each(|_| future::ready(()))
+                    .await;
+            }
+        })
+    }
+    async fn launch_nats_consumer(self, mut stream: Stream) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let forever = std::future::pending::<()>();
+            forever.await
+        })
+    }
 
+    
+    async fn handle_nats_message(&self, message: jetstream::Message) -> Result<(), ConsumerError> {
         let click: Click = clickplanet_proto::clicks::Click::decode(message.payload.clone())?;
 
-        self.process_click(click).await?;
+        self.process_click(click).await
+            .map_err(|e| ConsumerError::ProcessingError(e.to_string()))?;
 
         message
             .ack()
             .await
-            .map_err(|e| PollingConsumerError::Processing(e.to_string()))?;
+            .map_err(|e| ConsumerError::AckError(e.to_string()))?;
 
         Ok(())
     }
@@ -124,33 +163,60 @@ impl OwnershipUpdateService {
     }
 
     async fn process_click(&self, click: Click) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let current_ownership: Option<Ownership> = self.click_persistence.get_tile(click.tile_id).await?;
+        let previous_ownership: Option<Ownership> = self.click_repository.save_click(click.tile_id as u32, &click).await?;
 
-        // Check if the country has changed
-        match &current_ownership {
-            Some(ownership) if ownership.country_id == click.country_id => {
-                return Ok(());
+        // Only process ownership change if:
+        // 1. There was a previous owner (Some) AND
+        // 2. The previous country_id is different from the current one
+        if let Some(last_ownership) = previous_ownership {
+            if last_ownership.country_id != click.country_id {
+                let notification = UpdateNotification {
+                    tile_id: click.tile_id.try_into().unwrap(),
+                    previous_country_id: last_ownership.country_id,
+                    country_id: click.country_id,
+                };
+
+                self.leaderboard_repository.process_ownership_change(&notification).await?;
+
+                let result = self.update_tx.send(notification);
+                if let Err(e) = result {
+                    tracing::debug!("No listener for ownership update: {:?}", e);
+                }
             }
-            _ => {}
-        }
-
-        // Build update notification
-        let notification = UpdateNotification {
-            tile_id: click.tile_id,
-            country_id: click.country_id,
-            previous_country_id: match current_ownership {
-                Some(ownership) => ownership.country_id,
-                None => String::new(),
-            },
-        };
-
-        // Broadcast the update
-        let result = self.update_tx.send(notification);
-
-        if let Err(e) = result {
-            tracing::debug!("No listener for ownership update: {:?}", e);
         }
 
         Ok(())
     }
+}
+async fn process_nats_messages(
+    nats_stream: Stream,
+    owner: Arc<OwnershipUpdateService>,
+    config: usize,
+) -> Result<(), ConsumerError> {
+    // Rest of the implementation remains the same
+    nats_stream
+        .map(|message_result| {
+            let result: Result<jetstream::Message, ConsumerError> = message_result.map_err(|e| ConsumerError::ProcessingError(e.to_string()));
+            result
+        })
+        .map(|message_result| {
+            let this = owner.clone();
+            let result: Result<jetstream::Message, ConsumerError> = message_result.map_err(|e| ConsumerError::ProcessingError(e.to_string()));
+
+            async move {
+                match result {
+                    Ok(msg) => {
+                        if let Err(e) = this.handle_nats_message(msg).await {
+                            error!("Error processing NATS message: {}", e);
+                        }
+                    }
+                    Err(e) => error!("Error receiving NATS message: {}", e),
+                }
+            }
+        })
+        .buffer_unordered(config)
+        .for_each(|_| future::ready(()))
+        .await;
+
+    Ok(())
 }

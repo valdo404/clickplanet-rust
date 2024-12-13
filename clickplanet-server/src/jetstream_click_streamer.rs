@@ -1,20 +1,13 @@
-use async_nats::jetstream::consumer::{Config, Consumer};
-use async_nats::jetstream::stream::Stream;
-use async_nats::jetstream::Context;
-use async_nats::{jetstream, ConnectError};
-use clickplanet_proto::clicks::{Click, ClickResponse};
-use futures::stream::{self};
+use async_nats::{jetstream};
+use clickplanet_proto::clicks::{Click, UpdateNotification};
 use futures::{future, StreamExt};
 use prost::Message;
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use thiserror::Error;
-use tracing::{error, info, instrument, Span};
-use crate::click_persistence::ClickRepository;
-use crate::redis_click_persistence::{RedisClickRepository, RedisPersistenceError};
+use tracing::{error, info};
+use crate::click_persistence::{ClickRepository, LeaderboardRepository};
+use crate::redis_click_persistence::{RedisClickRepository, RedisLeaderboardRepository};
 use crate::nats_commons;
-use crate::nats_commons::{get_stream, ConsumerConfig, PollingConsumerError, CLICK_STREAM_NAME};
+use crate::nats_commons::{get_stream, ConsumerConfig, PollingConsumerError};
 
 
 const CONSUMER_NAME: &'static str = "tile-state-processor";
@@ -22,18 +15,22 @@ const CONSUMER_NAME: &'static str = "tile-state-processor";
 pub struct ClickConsumer {
     jetstream: Arc<jetstream::Context>,
     consumer_config: ConsumerConfig,
-    redis_click_repository: Arc<dyn ClickRepository>,
+    click_repository: Arc<dyn ClickRepository>,
+    leaderboard_repository: Arc<dyn LeaderboardRepository>,
 }
 
 impl ClickConsumer {
-    pub async fn new(nats_url: &str, consumer_config: Option<ConsumerConfig>, redis_click_repository: RedisClickRepository) -> Result<Self, PollingConsumerError> {
+    pub async fn new(nats_url: &str, consumer_config: Option<ConsumerConfig>,
+                     redis_click_repository: RedisClickRepository,
+                     redis_leaderboard_repository: RedisLeaderboardRepository) -> Result<Self, PollingConsumerError> {
         let client = async_nats::connect(nats_url).await?;
         let jetstream = async_nats::jetstream::new(client);
 
         Ok(Self {
             jetstream: Arc::new(jetstream),
             consumer_config: consumer_config.unwrap_or_default(),
-            redis_click_repository: Arc::new(redis_click_repository)
+            click_repository: Arc::new(redis_click_repository),
+            leaderboard_repository: Arc::new(redis_leaderboard_repository),
         })
     }
 
@@ -71,13 +68,11 @@ impl ClickConsumer {
 
         consumer
             .map(|message_result| {
-                let this = self.clone();
-
                 async move {
                     match message_result {
                         Ok(msg) => {
                             info!("Processing message on subject: {}", msg.subject);
-                            if let Err(e) = this.handle_message(msg).await {
+                            if let Err(e) = self.handle_message(msg).await {
                                 error!("Error processing message: {}", e);
                             }
                         }
@@ -95,13 +90,26 @@ impl ClickConsumer {
     async fn handle_message(&self, message: jetstream::Message) -> Result<(), PollingConsumerError> {
         let subject = message.subject.as_str();
 
-        let tile_id: i32 = subject
+        let tile_id: u32 = subject
             .strip_prefix(nats_commons::CLICK_SUBJECT_PREFIX)
             .and_then(|id| id.parse().ok())
             .ok_or_else(|| PollingConsumerError::Processing("Invalid subject format".to_string()))?;
         let click: Click = clickplanet_proto::clicks::Click::decode(message.payload.clone())?;
 
-        self.redis_click_repository.save_click(tile_id, &click).await?;
+        let possible_ownership = self.click_repository.save_click(tile_id, &click).await?;
+
+        if let Some(last_ownership) = possible_ownership {
+            // Only process ownership change if the country_id is different
+            if last_ownership.country_id != click.country_id {
+                let notification = UpdateNotification {
+                    tile_id: tile_id.try_into().unwrap(),
+                    previous_country_id: last_ownership.country_id,
+                    country_id: click.country_id,
+                };
+
+                self.leaderboard_repository.process_ownership_change(&notification).await?;
+            }
+        }
 
         message
             .ack()

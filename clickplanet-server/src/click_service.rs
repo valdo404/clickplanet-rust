@@ -100,11 +100,14 @@ impl ClickService {
         let mut click_bytes = Vec::new();
         click_data.encode(&mut click_bytes)?;
 
-        self.jetstream
-            .publish(subject, click_bytes.into())
-            .await?;
+        let jetstream = self.jetstream.clone();
+        tokio::spawn(async move {
+            if let Err(e) = jetstream.publish(subject, click_bytes.into()).await {
+                tracing::error!("Failed to publish to jetstream: {}", e);
+            }
+        });
 
-        // self.sender.send(click_data)?;
+        self.sender.send(click_data)?;
 
         let publish_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)

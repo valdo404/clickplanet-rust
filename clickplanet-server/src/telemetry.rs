@@ -1,6 +1,7 @@
-use opentelemetry::trace::{Tracer, TracerProvider};
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry::trace::{TracerProvider};
 use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter, Registry};
+use tracing_subscriber::fmt::Layer;
+use tracing_subscriber::layer::Layered;
 
 #[derive(Clone, Debug)]
 pub struct TelemetryConfig {
@@ -33,7 +34,7 @@ pub async fn init_telemetry(config: TelemetryConfig) -> Result<(), Box<dyn std::
     let telemetry    = tracing_opentelemetry::layer().with_tracer(tracer);
 
     // Create a formatting layer for console output
-    let fmt_layer = fmt::layer()
+    let fmt_layer: Layer<Layered<EnvFilter, Registry, Registry>> = fmt::layer()
         .with_target(false)
         .with_thread_ids(true)
         .with_thread_names(true)
@@ -42,7 +43,7 @@ pub async fn init_telemetry(config: TelemetryConfig) -> Result<(), Box<dyn std::
 
     // Set up filter based on RUST_LOG env var, defaulting to info
     let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+        .unwrap_or_else(|_| EnvFilter::new("warn"));
 
     // Combine both layers
     let subscriber = Registry::default()

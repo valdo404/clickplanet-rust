@@ -10,6 +10,7 @@ use crate::geolookup::{CountryTilesMap, GeoLookup};
 use futures::StreamExt;
 use std::sync::Arc;
 use clap::Parser;
+use rustls::{ClientConfig, RootCertStore};
 
 use clickplanet_client::ClickPlanetRestClient;
 
@@ -44,6 +45,8 @@ struct Args {
 #[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Args::parse();
+    rustls::crypto::ring::default_provider().install_default()
+        .expect("Failed to install crypto provider");
 
     let runtime_handle = tokio::runtime::Handle::current();
     let coordinates: CoordinatesData = read_coordinates_from_file(&args.coordinates_file)?;

@@ -155,10 +155,9 @@ impl CountryWatchguard {
     }
 
     async fn claim_tile(&self, tile_id: &u32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-
         match timeout(
             Duration::from_secs(5),
-            self.client.click_tile(*tile_id as i32, &self.wanted_country)
+            self.client.click_tile(*tile_id, &self.wanted_country)
         ).await {
             Ok(result) => match result {
                 Ok(_) => {
@@ -175,7 +174,7 @@ impl CountryWatchguard {
             }
         }
 
-        self.wait_with_jitter().await;
+        /// self.wait_with_jitter().await;
         Ok(())
     }
 

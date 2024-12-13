@@ -4,6 +4,7 @@ mod telemetry;
 mod redis_click_persistence;
 mod ownership_service;
 mod click_persistence;
+mod in_memory_click_persistence;
 
 use crate::click_service::{get_or_create_jet_stream, ClickService};
 use axum::{
@@ -36,10 +37,13 @@ use tokio::sync::broadcast;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::task::JoinHandle;
 use clickplanet_proto::clicks::{Click, UpdateNotification};
-use crate::click_persistence::ClickRepository;
+use clickplanet_proto::clicks::{LeaderboardResponse, LeaderboardEntry};
+
+use crate::click_persistence::{ClickRepository, LeaderboardRepository};
+use crate::in_memory_click_persistence::{PapayaClickRepository, PapayaLeaderboardRepository};
 use crate::nats_commons::ConsumerConfig;
 use crate::ownership_service::OwnershipUpdateService;
-use crate::redis_click_persistence::RedisClickRepository;
+use crate::redis_click_persistence::{RedisClickRepository, RedisLeaderboardRepository};
 use crate::telemetry::{init_telemetry, TelemetryConfig};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -55,7 +59,8 @@ struct BatchRequestPayload {
 #[derive(Clone)]
 struct AppState {
     click_service: Arc<ClickService>,
-    click_persistence: Arc<dyn ClickRepository>,
+    click_repository: Arc<dyn ClickRepository>,
+    leaderboard_repository: Arc<dyn LeaderboardRepository>,
     update_notifification_broadcaster: Arc<Sender<UpdateNotification>>,
     ownership_update_service: Arc<OwnershipUpdateService>,
 }
@@ -76,12 +81,15 @@ async fn run(nats_url: &str, redis_url: &str) -> Result<(), Box<dyn std::error::
     let (update_notification_sender, _) = broadcast::channel(1000);
     let update_sender_ref = Arc::new(update_notification_sender);
 
-    let repository = Arc::new(RedisClickRepository::new(redis_url).await.unwrap());
+    let cold_repository: Arc<RedisClickRepository> = Arc::new(RedisClickRepository::new(redis_url).await?);
+    let click_repository: Arc<PapayaClickRepository> = Arc::new(PapayaClickRepository::populate_with(cold_repository).await?);
+    let leaderboard_repository: Arc<RedisLeaderboardRepository> = Arc::new(RedisLeaderboardRepository::new(redis_url).await?);
 
     let jetstream = Arc::new(get_or_create_jet_stream(nats_url).await?);
 
     let update_service = Arc::new(OwnershipUpdateService::new(
-        repository.clone(),
+        click_repository.clone(),
+        leaderboard_repository.clone(),
         click_sender_ref.clone(),
         update_sender_ref.clone(),
         jetstream.clone(),
@@ -94,15 +102,20 @@ async fn run(nats_url: &str, redis_url: &str) -> Result<(), Box<dyn std::error::
 
     let state = AppState {
         click_service: Arc::new(ClickService::new(jetstream.clone(), click_sender_ref.clone()).await.unwrap()),
-        click_persistence: repository.clone(),
+        click_repository: click_repository.clone(),
+        leaderboard_repository: leaderboard_repository.clone(),
+
         update_notifification_broadcaster: update_sender_ref.clone(),
         ownership_update_service: update_service.clone(),
     };
 
     let app = Router::new()
         .route("/api/click", post(handle_click))
+        .route("/v2/rpc/click", post(handle_click))
         .route("/api/ownerships-by-batch", post(handle_get_ownerships_by_batch))
         .route("/v2/rpc/ownerships-by-batch", post(handle_get_ownerships_by_batch))
+        .route("/v2/rpc/ownerships", get(handle_get_ownerships))
+        .route("/v2/rpc/leaderboard", get(handle_get_leaderboard))
         .route("/ws/listen", get(handle_ws_upgrade))
         .route("/v2/ws/listen", get(handle_ws_upgrade))
         .with_state(state);
@@ -111,19 +124,24 @@ async fn run(nats_url: &str, redis_url: &str) -> Result<(), Box<dyn std::error::
     println!("Server listening on 0.0.0.0:3000");
 
     let server: Serve<Router, Router> = axum::serve(listener, app);
-    let update_service_handle = update_service.run();
+    let update_service_clone = update_service.clone();
+    let update_service_handle = update_service_clone.run();
 
     tokio::select! {
         result = server => {
             if let Err(e) = result {
                 error!("Server error: {:?}", e);
                 return Err(e.to_string().into());
+            } else {
+                error!("Unexpected server exit");
             }
         }
         result = update_service_handle => {
             if let Err(e) = result {
-                error!("Ownership update service error: {:?}", e);
-                return Err(e.to_string().into());
+               error!("Ownership update service error: {:?}", e);
+               return Err(e.to_string().into());
+            } else {
+               error!("Unexpected update service exit");
             }
         }
     }
@@ -141,7 +159,7 @@ async fn handle_click(
         })?;
 
     tokio::time::timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(10),
         state.click_service.process_click(click_request)
     )
         .await
@@ -158,6 +176,39 @@ async fn handle_click(
     Ok(axum::Json(serde_json::json!({})))
 }
 
+async fn handle_get_ownerships(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, StatusCode> {
+    let response = tokio::time::timeout(
+        Duration::from_secs(5),
+        state.click_repository.get_ownerships(),
+    )
+        .await
+        .map_err(|e| {
+            error!("Timeout error while calling get_ownerships: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .map_err(|e| {
+            error!("Error while processing get_ownerships: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let mut response_bytes = Vec::new();
+
+    response
+        .encode(&mut response_bytes)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let base64_data = encode(&response_bytes);
+
+    let payload = json!({
+        "data": base64_data,
+    });
+
+    Ok(axum::Json(payload))
+}
+
+
 async fn handle_get_ownerships_by_batch(
     State(state): State<AppState>,
     Json(payload): Json<BatchRequestPayload>,
@@ -167,9 +218,9 @@ async fn handle_get_ownerships_by_batch(
 
     let response = tokio::time::timeout(
         Duration::from_secs(5),
-        state.click_persistence.get_ownerships_by_batch(
-            batch_request.start_tile_id,
-            batch_request.end_tile_id,
+        state.click_repository.get_ownerships_by_batch(
+            batch_request.start_tile_id as u32,
+            batch_request.end_tile_id as u32,
         ),
     )
         .await
@@ -246,4 +297,51 @@ async fn handle_ws_connection(socket: WebSocket, state: AppState) {
         _ = &mut send_task => recv_task.abort(),
         _ = &mut recv_task => send_task.abort(),
     }
+}
+
+async fn handle_get_leaderboard(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, StatusCode> {
+    let leaderboard_data = tokio::time::timeout(
+        Duration::from_secs(5),
+        state.leaderboard_repository.leaderboard(),
+    )
+        .await
+        .map_err(|e| {
+            error!("Timeout error while fetching leaderboard: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?
+        .map_err(|e| {
+            error!("Error while fetching leaderboard: {:?}", e);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let mut response = LeaderboardResponse {
+        entries: Vec::new(),
+    };
+
+    // Convert HashMap to vec and sort by score in descending order
+    let mut entries: Vec<_> = leaderboard_data
+        .into_iter()
+        .map(|(country_id, score)| LeaderboardEntry {
+            country_id,
+            score,
+        })
+        .collect();
+
+    entries.sort_by(|a, b| b.score.cmp(&a.score));
+    response.entries = entries;
+
+    let mut response_bytes = Vec::new();
+    response
+        .encode(&mut response_bytes)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let base64_data = encode(&response_bytes);
+
+    let payload = json!({
+        "data": base64_data,
+    });
+
+    Ok(axum::Json(payload))
 }
