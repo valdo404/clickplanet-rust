@@ -100,7 +100,9 @@ async fn run(nats_url: &str, redis_url: &str) -> Result<(), Box<dyn std::error::
     let app = Router::new()
         .route("/api/click", post(handle_click))
         .route("/api/ownerships-by-batch", post(handle_get_ownerships_by_batch))
-        .route("/ws/listen", get(handle_ws_upgrade))  // Add this
+        .route("/v2/rpc/ownerships-by-batch", post(handle_get_ownerships_by_batch))
+        .route("/ws/listen", get(handle_ws_upgrade))
+        .route("/v2/ws/listen", get(handle_ws_upgrade))
         .with_state(state);
 
     let listener = TcpListener::bind("0.0.0.0:3000").await?;
