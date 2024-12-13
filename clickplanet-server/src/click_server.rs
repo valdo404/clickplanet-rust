@@ -1,10 +1,10 @@
 mod click_service;
-mod constants;
+mod nats_commons;
 mod telemetry;
 mod redis_click_persistence;
 mod ownership_service;
 
-use crate::click_service::ClickService;
+use crate::click_service::{get_or_create_jet_stream, ClickService};
 use axum::{
     extract::{Json, State},
     extract::ws::{Message as WebsocketMessage},
@@ -35,6 +35,7 @@ use tokio::sync::broadcast;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::task::JoinHandle;
 use clickplanet_proto::clicks::{Click, UpdateNotification};
+use crate::nats_commons::ConsumerConfig;
 use crate::ownership_service::OwnershipUpdateService;
 use crate::redis_click_persistence::RedisClickRepository;
 use crate::telemetry::{init_telemetry, TelemetryConfig};
@@ -75,13 +76,25 @@ async fn run(nats_url: &str, redis_url: &str) -> Result<(), Box<dyn std::error::
 
     let repository = Arc::new(RedisClickRepository::new(redis_url).await.unwrap());
 
-    let update_service = Arc::new(OwnershipUpdateService::new(repository.clone(), click_sender_ref.clone(), update_sender_ref.clone()));
+    let jetstream = Arc::new(get_or_create_jet_stream(nats_url).await?);
+
+    let update_service = Arc::new(OwnershipUpdateService::new(
+        repository.clone(),
+        click_sender_ref.clone(),
+        update_sender_ref.clone(),
+        jetstream.clone(),
+        Some(ConsumerConfig {
+            concurrent_processors: 8,
+            ack_wait: Duration::from_secs(10),
+            ..Default::default()
+        })
+    ));
 
     let state = AppState {
-        click_service: Arc::new(ClickService::new(nats_url, click_sender_ref.clone()).await.unwrap()),
+        click_service: Arc::new(ClickService::new(jetstream.clone(), click_sender_ref.clone()).await.unwrap()),
         click_persistence: repository.clone(),
         update_notifification_broadcaster: update_sender_ref.clone(),
-        ownership_update_service: update_service.clone()
+        ownership_update_service: update_service.clone(),
     };
 
     let app = Router::new()
@@ -233,16 +246,4 @@ async fn handle_ws_connection(socket: WebSocket, state: AppState) {
         _ = &mut send_task => recv_task.abort(),
         _ = &mut recv_task => send_task.abort(),
     }
-}
-
-pub fn init_ownership_update_service(
-    ownership_update_service: OwnershipUpdateService,
-) -> JoinHandle<()> {
-    // Spawn the service
-    tokio::spawn(async move {
-        if let Err(e) = ownership_update_service.run().await {
-            error!("Ownership update service error: {:?}", e);
-        }
-    })
-
 }

@@ -9,11 +9,11 @@ use tokio::sync::broadcast::Sender;
 use tracing::{field, info, instrument, Instrument, Span};
 use uuid::Uuid;
 use clickplanet_proto::clicks::{Click, UpdateNotification};
-use crate::constants;
-use crate::constants::{CLICK_STREAM_NAME, CLICK_SUBJECT_PREFIX};
+use crate::nats_commons;
+use crate::nats_commons::{CLICK_STREAM_NAME, CLICK_SUBJECT_PREFIX};
 
 pub struct ClickService {
-    jetstream: jetstream::Context,
+    jetstream: Arc<jetstream::Context>,
     sender: Arc<Sender<Click>>,
 }
 
@@ -57,9 +57,7 @@ pub async fn get_or_create_jet_stream(nats_url: &str) -> Result<Context, ClickSe
 
 
 impl ClickService {
-    pub async fn new(nats_url: &str, sender: Arc<Sender<Click>>) -> Result<Self, ClickServiceError> {
-        let jetstream = get_or_create_jet_stream(nats_url).await?;
-
+    pub async fn new(jetstream: Arc<Context>, sender: Arc<Sender<Click>>) -> Result<Self, ClickServiceError> {
         Ok(Self { jetstream, sender })
     }
 

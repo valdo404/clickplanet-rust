@@ -3,7 +3,7 @@ use tracing::info;
 use crate::redis_click_persistence::RedisClickRepository;
 
 mod jetstream_click_streamer;
-mod constants;
+mod nats_commons;
 mod telemetry;
 mod redis_click_persistence;
 
