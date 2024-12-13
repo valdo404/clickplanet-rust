@@ -1,3 +1,7 @@
 .idea
 target
 node_modules
+
+data/redis/*
+data/nats/config/*
+data/nats/jetstream/*

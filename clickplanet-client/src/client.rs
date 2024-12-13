@@ -16,6 +16,7 @@ use clickplanet_proto::clicks::OwnershipState;
 use clickplanet_proto::clicks::*;
 use futures::StreamExt;
 use rand::Rng;
+use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::net::TcpStream;
@@ -53,30 +54,43 @@ struct OwnershipResponse {
 }
 
 pub struct ClickPlanetRestClient {
-    base_url: String,
+    client: Arc<Client>,
+    host: String,
+    port: u16,
+    secure: bool,
 }
 
 pub const CLIENT_NAME: &'static str = "clickplanet client owned by valdo404";
 
 impl ClickPlanetRestClient {
-    pub fn new(base_url: &str) -> Self {
+    pub fn new(base_url: &str, port: u16, secure: bool) -> Self {
+        let client = Client::builder()
+            .pool_idle_timeout(Duration::from_secs(30))
+            .pool_max_idle_per_host(32)
+            .timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(5))
+            .build()
+            .expect("Failed to create HTTP client");
+
         Self {
-            base_url: base_url.to_string(),
+            client: Arc::new(client),
+            host: base_url.to_string(),
+            port,
+            secure: secure,
         }
     }
 
 
-    pub async fn click_tile(&self, tile_id: i32, country_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn click_tile(&self, tile_id: u32, country_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let request = clicks::ClickRequest {
-            tile_id,
+            tile_id: tile_id.try_into().unwrap(),
             country_id: country_id.to_string(),
         };
 
         let mut proto_bytes = Vec::new();
         request.encode(&mut proto_bytes)?;
 
-        let client = reqwest::Client::new();
-        let base_url = self.base_url.clone();
+        let base_url = self.host.clone();
 
         // Configure the retry strategy
         let retry_strategy = ExponentialBackoff::from_millis(100)
@@ -84,9 +98,11 @@ impl ClickPlanetRestClient {
             .take(2)
             .map(jitter);
 
+        let client = self.client.clone();
+
         let result = Retry::spawn(retry_strategy, || async {
             let response = client
-                .post(format!("https://{}/api/click", base_url))
+                .post(format!("{}://{}:{}/v2/rpc/click", if self.secure { "https" } else { "http" }, base_url, self.port))
                 .header("User-Agent", CLIENT_NAME)
                 .header("Content-Type", "application/json")
                 .header("Origin", format!("https://{}", base_url))
@@ -108,14 +124,14 @@ impl ClickPlanetRestClient {
 
     pub async fn get_ownerships_by_batch(
         &self,
-        start_tile_id: i32,
-        end_tile_id: i32,
+        start_tile_id: u32,
+        end_tile_id: u32,
     ) -> Result<clicks::OwnershipState, Box<dyn std::error::Error + Send + Sync>> {
         let client = reqwest::Client::new();
 
         let batch_request = clicks::BatchRequest {
-            start_tile_id,
-            end_tile_id,
+            start_tile_id: start_tile_id.try_into().unwrap(),
+            end_tile_id: end_tile_id.try_into().unwrap(),
         };
 
         let mut proto_bytes = Vec::new();
@@ -128,11 +144,11 @@ impl ClickPlanetRestClient {
         });
 
         let response = client
-            .post(format!("https://{}/api/ownerships-by-batch", self.base_url))
+            .post(format!("{}://{}:{}/v2/rpc/ownerships-by-batch", if self.secure { "https" } else { "http" }, self.host, self.port))
             .header("User-Agent", CLIENT_NAME)
             .header("Content-Type", "application/json")
-            .header("Origin", format!("https://{}", self.base_url))
-            .header("Referer", format!("https://{}/", self.base_url))
+            .header("Origin", format!("https://{}", self.host))
+            .header("Referer", format!("https://{}/", self.host))
             .json(&payload)
             .send()
             .await
@@ -158,6 +174,7 @@ impl ClickPlanetRestClient {
         let ownership_state = clicks::OwnershipState::decode(&proto_bytes[..])
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
+
         Ok(ownership_state)
     }
 
@@ -165,9 +182,9 @@ impl ClickPlanetRestClient {
         &self,
         index_coordinates: &Arc<dyn TileCount + Send + Sync>,
     ) -> Result<clicks::OwnershipState, Box<dyn std::error::Error + Send + Sync>> {
-        const BATCH_SIZE: i32 = 10000;
+        const BATCH_SIZE: u32 = 10000;
 
-        let max_tile_id = (index_coordinates.len() as i32) - 1;
+        let max_tile_id = (index_coordinates.len() as u32) - 1;
 
         let mut final_state = clicks::OwnershipState {
             ownerships: Vec::new(),
@@ -177,8 +194,8 @@ impl ClickPlanetRestClient {
         while start_tile_id <= max_tile_id {
             let end_tile_id = (start_tile_id + BATCH_SIZE).min(max_tile_id);
 
-            let millis = rand::thread_rng().gen_range(300..=1000);
-            sleep(Duration::from_millis(millis)).await;
+            // let millis = rand::thread_rng().gen_range(300..=1000);
+            // sleep(Duration::from_millis(millis)).await;
 
             let result: Result<OwnershipState, Box<dyn Error + Send + Sync>> = self.get_ownerships_by_batch(start_tile_id, end_tile_id).await;
 
@@ -224,14 +241,15 @@ impl ClickPlanetRestClient {
             .map(jitter);
 
         let result = Retry::spawn(retry_strategy, || async {
-            let ws_url = format!("wss://{}/ws/listen", self.base_url);
+            let ws_url = format!("{}://{}:{}/v2/ws/listen", if self.secure { "wss" } else { "ws" }, self.host, self.port);
+
             let url = Url::parse(&ws_url).map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
             let request = Request::builder()
                 .uri(url.as_str())
                 .header("User-Agent", CLIENT_NAME)
-                .header("Origin", format!("https://{}", self.base_url))
-                .header("Host", self.base_url.clone())
+                .header("Origin", format!("{}://{}:{}", if self.secure { "https" } else { "http" }, self.host, self.port))
+                .header("Host", self.host.clone())
                 .header("Connection", "Upgrade")
                 .header("Upgrade", "websocket")
                 .header("Sec-WebSocket-Version", "13")

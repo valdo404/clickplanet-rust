@@ -10,6 +10,7 @@ use crate::geolookup::{CountryTilesMap, GeoLookup};
 use futures::StreamExt;
 use std::sync::Arc;
 use clap::Parser;
+use rustls::{ClientConfig, RootCertStore};
 
 use clickplanet_client::ClickPlanetRestClient;
 
@@ -17,19 +18,21 @@ use clickplanet_client::ClickPlanetRestClient;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Target country code (e.g., "fr", "de")
     #[arg(long, default_value = "fr")]
     target_country: String,
 
-    /// Wanted country code (e.g., "fr", "de")
     #[arg(long, default_value = "fr")]
     wanted_country: String,
 
-    /// Server hostname
     #[arg(long, default_value = "clickplanet.lol")]
-    click_planet_host: String,
+    host: String,
 
-    /// Path to coordinates file
+    #[arg(long, default_value = "443")]
+    port: u16,
+
+    #[arg(long, default_value = "false")]
+    unsecure: bool,
+
     #[arg(long, default_value = "coordinates.json")]
     coordinates_file: String,
 
@@ -42,6 +45,8 @@ struct Args {
 #[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args = Args::parse();
+    rustls::crypto::ring::default_provider().install_default()
+        .expect("Failed to install crypto provider");
 
     let runtime_handle = tokio::runtime::Handle::current();
     let coordinates: CoordinatesData = read_coordinates_from_file(&args.coordinates_file)?;
@@ -49,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let geolookup: GeoLookup = GeoLookup::from_file(&args.geojson_file)?;
 
     let country_tile_map = CountryTilesMap::load_or_build(&geolookup, &index_coordinates)?;
-    let client = ClickPlanetRestClient::new(&args.click_planet_host);
+    let client = ClickPlanetRestClient::new(&args.host, args.port, !args.unsecure);
 
     println!("Initializing watchguard for {} -> {}", args.target_country, args.wanted_country);
 

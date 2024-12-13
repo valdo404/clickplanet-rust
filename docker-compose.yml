@@ -1,0 +1,33 @@
+version: '3.8'
+services:
+  nats:
+    image: nats:2.9-alpine
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: ["-js", "-m", "8222"]
+    volumes:
+      - ./data/nats/jetstream:/data/jetstream
+      - ./data/nats/config:/etc/nats
+    environment:
+      - JS_STORE_DIR=/data/jetstream
+    networks:
+      - app-network
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    command: redis-server --appendonly yes
+    networks:
+      - app-network
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+networks:
+  app-network:
+    driver: bridge

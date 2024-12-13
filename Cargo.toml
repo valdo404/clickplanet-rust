@@ -3,8 +3,7 @@ members = [
     "clickplanet-client",
     "clickplanet-server",
     "clickplanet-proto",
-    "clickplanet-robot",
-
+    "clickplanet-robot"
 ]
 
 
@@ -28,3 +27,4 @@ geojson = "0.24.1"
 rayon = "1.10.0"
 clap = { version = "4.5.23", features = ["derive"] }
 tokio-retry = "0.3.0"
+thiserror = "2.0.6"

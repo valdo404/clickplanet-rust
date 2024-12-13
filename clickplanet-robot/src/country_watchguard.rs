@@ -104,13 +104,7 @@ impl CountryWatchguard {
 
 
         // Clone self for the second task
-        let self_clone = Self {
-            client: self.client.clone(),
-            tile_coordinates_map: self.tile_coordinates_map.clone(),
-            country_tiles: self.country_tiles.clone(),
-            target_country: self.target_country.clone(),
-            wanted_country: self.wanted_country.clone(),
-        };
+        let self_clone = self.clone();
 
         let monitor = handle.spawn(async move {
             self.monitor_updates().await
@@ -121,20 +115,13 @@ impl CountryWatchguard {
         });
 
         tokio::select! {
-            result = monitor => {
-                println!("Monitor task completed: {:?}", result);
-                return match result {
-                    Ok(inner_result) => inner_result,
-                    Err(join_error) => Err(Box::new(join_error) as Box<dyn Error + Send + Sync>)?
-                }
+            res = monitor => {
+                println!("Monitor task completed: {:?}", res);
+                res.unwrap_or_else(|e| Err(Box::new(e) as Box<dyn Error + Send + Sync>))
             }
-            result = checker => {
-                return match result {
-                    Ok(inner_result) => inner_result,
-                    Err(join_error) => Err(Box::new(join_error) as Box<dyn Error + Send + Sync>)?
-                }
-            }
+            res = checker => res.unwrap_or_else(|e| Err(Box::new(e) as Box<dyn Error + Send + Sync>))
         }
+
     }
 
     async fn wait_with_jitter(&self) {
@@ -168,10 +155,9 @@ impl CountryWatchguard {
     }
 
     async fn claim_tile(&self, tile_id: &u32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-
         match timeout(
             Duration::from_secs(5),
-            self.client.click_tile(*tile_id as i32, &self.wanted_country)
+            self.client.click_tile(*tile_id, &self.wanted_country)
         ).await {
             Ok(result) => match result {
                 Ok(_) => {
@@ -188,7 +174,7 @@ impl CountryWatchguard {
             }
         }
 
-        self.wait_with_jitter().await;
+        /// self.wait_with_jitter().await;
         Ok(())
     }
 

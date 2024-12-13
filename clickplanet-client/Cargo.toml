@@ -15,24 +15,15 @@ clickplanet-proto = { path = "../clickplanet-proto" }
 
 # Core dependencies from workspace
 prost.workspace = true
-tonic.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
 futures.workspace = true
 url.workspace = true
-native-tls.workspace = true
 base64.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-futures-util.workspace = true
-webpki-roots.workspace = true
-geojson.workspace = true
-clap.workspace = true
 tokio-retry.workspace = true
-rayon.workspace = true
-rstar.workspace = true
 
 # Additional dependencies specific to client
-rustls = { version = "0.23.19", features = ["std"] }
