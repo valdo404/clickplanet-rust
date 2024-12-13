@@ -3,6 +3,7 @@ mod nats_commons;
 mod telemetry;
 mod redis_click_persistence;
 mod ownership_service;
+mod click_persistence;
 
 use crate::click_service::{get_or_create_jet_stream, ClickService};
 use axum::{
@@ -35,6 +36,7 @@ use tokio::sync::broadcast;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::task::JoinHandle;
 use clickplanet_proto::clicks::{Click, UpdateNotification};
+use crate::click_persistence::ClickRepository;
 use crate::nats_commons::ConsumerConfig;
 use crate::ownership_service::OwnershipUpdateService;
 use crate::redis_click_persistence::RedisClickRepository;
@@ -53,7 +55,7 @@ struct BatchRequestPayload {
 #[derive(Clone)]
 struct AppState {
     click_service: Arc<ClickService>,
-    click_persistence: Arc<RedisClickRepository>,
+    click_persistence: Arc<dyn ClickRepository>,
     update_notifification_broadcaster: Arc<Sender<UpdateNotification>>,
     ownership_update_service: Arc<OwnershipUpdateService>,
 }
@@ -163,8 +165,6 @@ async fn handle_get_ownerships_by_batch(
     let batch_request = clickplanet_proto::clicks::BatchRequest::decode(Bytes::from(payload.data))
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    info!("Request: {:?}", batch_request);
-
     let response = tokio::time::timeout(
         Duration::from_secs(5),
         state.click_persistence.get_ownerships_by_batch(
@@ -181,8 +181,6 @@ async fn handle_get_ownerships_by_batch(
             error!("Error while processing get_ownerships_by_batch: {:?}", e);
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
-
-    info!("Response: {:?}", response);
 
     let mut response_bytes = Vec::new();
 

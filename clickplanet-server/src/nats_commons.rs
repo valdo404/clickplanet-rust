@@ -3,6 +3,7 @@ use std::time::Duration;
 use async_nats::{jetstream, ConnectError};
 use async_nats::jetstream::Context;
 use thiserror::Error;
+use crate::click_persistence::ClickRepositoryError;
 use crate::redis_click_persistence::RedisPersistenceError;
 
 pub const CLICK_SUBJECT_PREFIX: &'static str = "clicks.tile.";
@@ -35,8 +36,8 @@ pub enum PollingConsumerError {
     Processing(String),
     #[error("Failed to decode protobuf: {0}")]
     ProtobufDecode(#[from] prost::DecodeError),
-    #[error("Failed to decode protobuf: {0}")]
-    RedisPersistence(#[from] RedisPersistenceError)
+    #[error("Failed to store data: {0}")]
+    Persistence(#[from] ClickRepositoryError)
 }
 
 pub async fn get_stream(jetstream: Arc<Context>) -> Result<jetstream::stream::Stream, PollingConsumerError> {

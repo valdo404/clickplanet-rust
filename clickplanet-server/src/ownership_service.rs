@@ -6,6 +6,7 @@ use tokio::sync::broadcast;
 use tokio::sync::broadcast::Receiver;
 use tracing::error;
 use clickplanet_proto::clicks::{Click, UpdateNotification, Ownership};
+use crate::click_persistence::ClickRepository;
 use crate::nats_commons;
 use crate::nats_commons::{get_stream, ConsumerConfig, PollingConsumerError};
 use crate::redis_click_persistence::{RedisClickRepository, RedisPersistenceError};
@@ -13,7 +14,7 @@ use crate::redis_click_persistence::{RedisClickRepository, RedisPersistenceError
 const CONSUMER_NAME: &'static str = "tile-ownership-update";
 
 pub struct OwnershipUpdateService {
-    click_persistence: Arc<RedisClickRepository>,
+    click_persistence: Arc<dyn ClickRepository>,
     click_sender: Arc<broadcast::Sender<Click>>,
     update_tx: Arc<broadcast::Sender<UpdateNotification>>,
     jetstream: Arc<jetstream::Context>,
@@ -87,11 +88,6 @@ impl OwnershipUpdateService {
     async fn handle_nats_message(&self, message: jetstream::Message) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let subject = message.subject.as_str();
 
-        let tile_id: i32 = subject
-            .strip_prefix(nats_commons::CLICK_SUBJECT_PREFIX)
-            .and_then(|id| id.parse().ok())
-            .ok_or_else(|| PollingConsumerError::Processing("Invalid subject format".to_string()))?;
-
         let click: Click = clickplanet_proto::clicks::Click::decode(message.payload.clone())?;
 
         self.process_click(click).await?;
@@ -130,12 +126,9 @@ impl OwnershipUpdateService {
     async fn process_click(&self, click: Click) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let current_ownership: Option<Ownership> = self.click_persistence.get_tile(click.tile_id).await?;
 
-        tracing::info!("Current ownership: {:?}", current_ownership);
-
         // Check if the country has changed
         match &current_ownership {
             Some(ownership) if ownership.country_id == click.country_id => {
-                tracing::info!("Skipping update notification - country hasn't changed");
                 return Ok(());
             }
             _ => {}
@@ -155,7 +148,7 @@ impl OwnershipUpdateService {
         let result = self.update_tx.send(notification);
 
         if let Err(e) = result {
-            tracing::error!("No listener for ownership update: {:?}", e);
+            tracing::debug!("No listener for ownership update: {:?}", e);
         }
 
         Ok(())

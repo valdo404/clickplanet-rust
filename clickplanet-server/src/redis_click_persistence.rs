@@ -2,17 +2,18 @@ use deadpool_redis::{redis, Config as RedisConfig, CreatePoolError, PoolError, R
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use async_nats::ConnectError;
+use axum::async_trait;
 use clickplanet_proto::clicks::{Click, ClickResponse, Ownership, OwnershipState};
-use tracing::{info, instrument, Span};
+use tracing::{debug, info, instrument, Span};
 use deadpool_redis::redis::AsyncCommands;
 use thiserror::Error;
+use crate::click_persistence::{ClickRepository, ClickRepositoryError};
 
 const TILES_KEY: &str = "tiles";
 
 pub struct RedisClickRepository {
     redis_pool: Arc<deadpool_redis::Pool>,
 }
-
 
 #[derive(Error, Debug)]
 pub enum RedisPersistenceError {
@@ -26,8 +27,25 @@ pub enum RedisPersistenceError {
     BadKeyError(String),
 }
 
+
+#[derive(Error, Debug)]
+pub enum RedisError {
+    #[error("Redis error: {0}")]
+    Redis(#[from] deadpool_redis::redis::RedisError),
+    #[error("Redis pool error: {0}")]
+    RedisPool(#[from] PoolError),
+    #[error("Redis create pool error: {0}")]
+    CreateRedisPool(#[from] CreatePoolError),
+}
+
+impl From<RedisError> for ClickRepositoryError {
+    fn from(err: RedisError) -> Self {
+        ClickRepositoryError::StorageError(err.to_string())
+    }
+}
+
 impl RedisClickRepository {
-    pub async fn new(redis_url: &str) -> Result<Self, RedisPersistenceError> {
+    pub async fn new(redis_url: &str) -> Result<Self, RedisError> {
         let redis_cfg = RedisConfig::from_url(redis_url);
         let redis_pool = redis_cfg.create_pool(Some(Runtime::Tokio1))?;
 
@@ -35,21 +53,25 @@ impl RedisClickRepository {
             redis_pool: Arc::new(redis_pool),
         })
     }
+}
 
-    pub async fn get_tile(
+#[async_trait]
+impl ClickRepository for RedisClickRepository {
+    async fn get_tile(
         &self,
         tile_id: i32,
-    ) -> Result<Option<Ownership>, RedisPersistenceError> {
-        let mut redis_conn = self.redis_pool.get().await?;
+    ) -> Result<Option<Ownership>, ClickRepositoryError> {
+        let mut redis_conn = self.redis_pool.get().await.map_err(RedisError::from)?;
 
         let tile_contents: Vec<String> = redis_conn
-            .zrangebyscore_limit::<String, i32, i32, Vec<String>>(TILES_KEY.to_string(), tile_id, tile_id, 0,1)
-            .await?;
+            .zrangebyscore_limit::<String, i32, i32, Vec<String>>(TILES_KEY.to_string(), tile_id, tile_id, 0, 1)
+            .await
+            .map_err(RedisError::from)?;
 
         if let Some(val) = tile_contents.first() {
             let parts: Vec<&str> = val.split(':').collect();
             if parts.len() == 2 {
-                if let Ok(timestamp_ns) = parts[1].parse::<u64>() {
+                if let Ok(_) = parts[1].parse::<u64>() {
                     return Ok(Some(Ownership {
                         tile_id: tile_id as u32,
                         country_id: parts[0].to_string(),
@@ -61,12 +83,12 @@ impl RedisClickRepository {
         Ok(None)
     }
 
-    pub async fn get_ownerships_by_batch(
+    async fn get_ownerships_by_batch(
         &self,
         start_tile_id: i32,
         end_tile_id: i32,
-    ) -> Result<OwnershipState, Box<dyn std::error::Error + Send + Sync>> {
-        let mut redis_conn = self.redis_pool.get().await?;
+    ) -> Result<OwnershipState, ClickRepositoryError> {
+        let mut redis_conn = self.redis_pool.get().await.map_err(RedisError::from)?;
 
         let tile_contents: Vec<(String, String)> = redis_conn
             .zrangebyscore_withscores(
@@ -74,25 +96,25 @@ impl RedisClickRepository {
                 start_tile_id as isize,
                 end_tile_id as isize,
             )
-            .await?;
+            .await
+            .map_err(RedisError::from)?;
 
-        let mut ownerships: Vec<Ownership> = Vec::new();
+        let mut ownerships = Vec::new();
 
         for (contents, tile_id) in tile_contents {
             let parts: Vec<&str> = contents.split(':').collect();
             if parts.len() == 2 {
-                if let Ok(timestamp_ns) = parts[1].parse::<u64>() {
+                if let Ok(_) = parts[1].parse::<u64>() {
                     ownerships.push(Ownership {
-                        tile_id: tile_id.parse::<u32>()?,
+                        tile_id: tile_id.parse::<u32>()
+                            .map_err(|e| ClickRepositoryError::InvalidDataError(e.to_string()))?,
                         country_id: parts[0].to_string(),
                     });
                 }
             }
         }
 
-        let ownership_state = OwnershipState { ownerships };
-
-        Ok(ownership_state)
+        Ok(OwnershipState { ownerships })
     }
 
     #[instrument(
@@ -106,26 +128,27 @@ impl RedisClickRepository {
            message_processing_time = tracing::field::Empty,
         )
     )]
-    pub async fn save_click(&self, tile_id: i32, click: &Click) -> Result<(), RedisPersistenceError> {
+    async fn save_click(&self, tile_id: i32, click: &Click) -> Result<(), ClickRepositoryError> {
         let receive_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos() as u64;
 
-        info!(
+        debug!(
            "Received click for tile {} (country: {}, timestamp: {})",
            tile_id, click.country_id, click.timestamp_ns
         );
 
-        let mut redis_conn = self.redis_pool.get().await?;
+        let mut redis_conn = self.redis_pool.get().await.map_err(RedisError::from)?;
 
         let current_value: Option<String> = redis_conn
             .zrangebyscore::<String, i32, i32, Vec<String>>(TILES_KEY.to_string(), tile_id, tile_id)
-            .await?
+            .await
+            .map_err(RedisError::from)?
             .get(0)
             .cloned();
 
-        info!(
+        debug!(
            "Current value for tile {} ({:?})",
            tile_id, current_value
         );
@@ -146,23 +169,23 @@ impl RedisClickRepository {
                     }
                 }
             } else {
-                return Err(RedisPersistenceError::BadKeyError(current_val))
+                return Err(ClickRepositoryError::InvalidDataError(current_val));
             }
-
         } else {
-            info!("No key for tile {}", tile_id);
+            debug!("No key for tile {}", tile_id);
         }
 
-        let new_value: String = format!("{}:{}", click.country_id, click.timestamp_ns);
+        let new_value = format!("{}:{}", click.country_id, click.timestamp_ns);
 
-        info!(
+        debug!(
            "New value for tile {} ({:?})",
            tile_id, new_value
         );
 
         let old_values: Vec<String> = redis_conn
             .zrangebyscore(TILES_KEY, tile_id as f64, tile_id as f64)
-            .await?;
+            .await
+            .map_err(RedisError::from)?;
 
         let mut pipe = redis::pipe();
         let mut pipe = pipe
@@ -176,7 +199,9 @@ impl RedisClickRepository {
             }
         }
 
-        pipe.query_async(&mut redis_conn).await?;
+        pipe.query_async(&mut redis_conn)
+            .await
+            .map_err(RedisError::from)?;
 
         let processing_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)

@@ -6,6 +6,7 @@ mod jetstream_click_streamer;
 mod nats_commons;
 mod telemetry;
 mod redis_click_persistence;
+mod click_persistence;
 
 use crate::nats_commons::ConsumerConfig;
 use crate::jetstream_click_streamer::{ClickConsumer};

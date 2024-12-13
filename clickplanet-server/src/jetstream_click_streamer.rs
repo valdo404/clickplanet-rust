@@ -11,10 +11,10 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tracing::{error, info, instrument, Span};
+use crate::click_persistence::ClickRepository;
 use crate::redis_click_persistence::{RedisClickRepository, RedisPersistenceError};
 use crate::nats_commons;
 use crate::nats_commons::{get_stream, ConsumerConfig, PollingConsumerError, CLICK_STREAM_NAME};
-
 
 
 const CONSUMER_NAME: &'static str = "tile-state-processor";
@@ -22,7 +22,7 @@ const CONSUMER_NAME: &'static str = "tile-state-processor";
 pub struct ClickConsumer {
     jetstream: Arc<jetstream::Context>,
     consumer_config: ConsumerConfig,
-    redis_click_repository: Arc<RedisClickRepository>,
+    redis_click_repository: Arc<dyn ClickRepository>,
 }
 
 impl ClickConsumer {
