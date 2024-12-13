@@ -1,4 +1,5 @@
 use opentelemetry::trace::{TracerProvider};
+use opentelemetry_otlp::WithExportConfig;
 use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter, Registry};
 use tracing_subscriber::fmt::Layer;
 use tracing_subscriber::layer::Layered;
@@ -22,6 +23,8 @@ pub async fn init_telemetry(config: TelemetryConfig) -> Result<(), Box<dyn std::
     let tracer_provider = opentelemetry_sdk::trace::TracerProvider::builder()
         .with_batch_exporter(
             opentelemetry_otlp::SpanExporter::builder()
+                .with_endpoint(config.otlp_endpoint)
+                .with_protocol(opentelemetry_otlp::Protocol::Grpc)
                 .with_tonic()
                 .build()?,
             opentelemetry_sdk::runtime::Tokio,

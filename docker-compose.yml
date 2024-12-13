@@ -45,9 +45,8 @@ services:
   click-server:
     image: clickplanet/click-server:latest
     environment:
-      - RUST_LOG=warn
+      - RUST_LOG=debug
     command: [
-      "./click-server",
       "--nats-url", "nats://nats:4222",
       "--redis-url", "redis://redis:6379",
       "--otlp-endpoint", "http://jaeger:4317",
@@ -68,9 +67,8 @@ services:
   state-click-persister:
     image: clickplanet/state-click-persister:latest
     environment:
-      - RUST_LOG=warn
+      - RUST_LOG=debug
     command: [
-      "./state-click-persister",
       "--nats-url", "nats://nats:4222",
       "--redis-url", "redis://redis:6379",
       "--otlp-endpoint", "http://jaeger:4317",
