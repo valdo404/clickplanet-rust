@@ -67,9 +67,8 @@ impl RedisClickRepository {
         end_tile_id: i32,
     ) -> Result<OwnershipState, Box<dyn std::error::Error + Send + Sync>> {
         let mut redis_conn = self.redis_pool.get().await?;
-        info!("Request: {} / {}", start_tile_id, end_tile_id);
 
-        let tile_contents: Vec<(i64, String)> = redis_conn
+        let tile_contents: Vec<(String, String)> = redis_conn
             .zrangebyscore_withscores(
                 TILES_KEY,
                 start_tile_id as isize,
@@ -79,13 +78,13 @@ impl RedisClickRepository {
 
         let mut ownerships: Vec<Ownership> = Vec::new();
 
-        for (tile_id, val) in tile_contents {
-            let parts: Vec<&str> = val.split(':').collect();
+        for (contents, tile_id) in tile_contents {
+            let parts: Vec<&str> = contents.split(':').collect();
             if parts.len() == 2 {
                 if let Ok(timestamp_ns) = parts[1].parse::<u64>() {
                     ownerships.push(Ownership {
-                        tile_id: tile_id as u32,  // Use the score as tile_id
-                        country_id: parts[0].to_string(),  // First part is country_id
+                        tile_id: tile_id.parse::<u32>()?,
+                        country_id: parts[0].to_string(),
                     });
                 }
             }
