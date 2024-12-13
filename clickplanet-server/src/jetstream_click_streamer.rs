@@ -48,6 +48,7 @@ impl ClickConsumer {
             ack_policy: jetstream::consumer::AckPolicy::Explicit,
             ack_wait: self.consumer_config.ack_wait,
             max_deliver: self.consumer_config.max_deliver,
+            name: Some(CONSUMER_NAME.to_string()),
             ..Default::default()
         };
 

@@ -7,7 +7,8 @@ mod nats_commons;
 mod telemetry;
 mod redis_click_persistence;
 
-use crate::jetstream_click_streamer::{ConsumerConfig, ClickConsumer};
+use crate::nats_commons::ConsumerConfig;
+use crate::jetstream_click_streamer::{ClickConsumer};
 use crate::telemetry::{init_telemetry, TelemetryConfig};
 
 #[tokio::main]
