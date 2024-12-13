@@ -57,6 +57,22 @@ cargo run --bin clickplanet-robot -- --target-country ru --wanted-country ru --p
 cargo run --bin clickplanet-robot -- --target-country ru --wanted-country fr --port 3000 --host localhost --unsecure
 ```
 
+NATS Storage.
+
+```
+2024-12-13 15:55:48 [1] 2024/12/13 14:55:48.096982 [INF] ---------------- JETSTREAM ----------------
+2024-12-13 15:55:48 [1] 2024/12/13 14:55:48.096984 [INF]   Max Memory:      5.81 GB
+2024-12-13 15:55:48 [1] 2024/12/13 14:55:48.096985 [INF]   Max Storage:     83.91 GB
+2024-12-13 15:55:48 [1] 2024/12/13 14:55:48.096985 [INF]   Store Directory: "/tmp/nats/jetstream"
+2024-12-13 15:55:48 [1] 2024/12/13 14:55:48.096986 [INF] -------------------------------------------
+2024-12-13 15:55:48 [1] 2024/12/13 14:55:48.097781 [INF]   Starting restore for stream '$G > CLICKS'
+2024-12-13 15:55:49 [1] 2024/12/13 14:55:49.227323 [INF]   Restored 13,367,380 messages for stream '$G > CLICKS'
+2024-12-13 15:55:49 [1] 2024/12/13 14:55:49.227348 [INF]   Recovering 2 consumers for stream - '$G > CLICKS'
+2024-12-13 15:55:49 [1] 2024/12/13 14:55:49.228354 [INF] Listening for client connections on 0.0.0.0:4222
+2024-12-13 15:55:49 [1] 2024/12/13 14:55:49.228562 [INF] Server is ready
+```
+
+
 This generates gygabytes of events, and despite all of this, the websocket endpoints do not saturate
 
 ## Deployment
