@@ -26,7 +26,7 @@ use tokio;
 use tokio::net::TcpListener;
 use tracing::{error};
 use base64::{encode};
-
+use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use std::{time::Duration};
 use axum::extract::WebSocketUpgrade;
@@ -64,11 +64,35 @@ struct AppState<T: ClickRepository + Send + Sync> {
     ownership_update_service: Arc<OwnershipUpdateService>,
 }
 
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(long, env = "NATS_URL", default_value = "nats://localhost:4222")]
+    nats_url: String,
+
+    #[arg(long, env = "REDIS_URL", default_value = "redis://localhost:6379")]
+    redis_url: String,
+
+    #[arg(long, env = "OTEL_EXPORTER_OTLP_ENDPOINT", default_value = "http://localhost:4317")]
+    otlp_endpoint: String,
+
+    #[arg(long, env = "SERVICE_NAME", default_value = "clickplanet-server")]
+    service_name: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_telemetry(TelemetryConfig::default()).await?;
+    let args = Args::parse();
 
-    run("nats://localhost:4222", "redis://localhost:6379").await?;
+    let telemetry_config = TelemetryConfig {
+        otlp_endpoint: args.otlp_endpoint,
+        service_name: args.service_name,
+    };
+
+    init_telemetry(telemetry_config).await?;
+
+    run(&args.nats_url, &args.redis_url).await?;
 
     Ok(())
 }

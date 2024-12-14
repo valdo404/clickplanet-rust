@@ -13,6 +13,11 @@ services:
       - JS_STORE_DIR=/data/jetstream
     networks:
       - app-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
 
   redis:
     image: redis:7-alpine
@@ -23,11 +28,64 @@ services:
     command: redis-server --appendonly yes
     networks:
       - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
   jaeger:
     image: jaegertracing/all-in-one:latest
     ports:
       - "16686:16686"
       - "4317:4317"
+    networks:
+      - app-network
+
+  click-server:
+    image: clickplanet/click-server:latest
+    environment:
+      - RUST_LOG=debug
+    command: [
+      "--nats-url", "nats://nats:4222",
+      "--redis-url", "redis://redis:6379",
+      "--otlp-endpoint", "http://jaeger:4317",
+      "--service-name", "click-server"
+    ]
+    ports:
+      - "3000:3000"
+    networks:
+      - app-network
+    depends_on:
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+
+  state-click-persister:
+    image: clickplanet/state-click-persister:latest
+    environment:
+      - RUST_LOG=debug
+    command: [
+      "--nats-url", "nats://nats:4222",
+      "--redis-url", "redis://redis:6379",
+      "--otlp-endpoint", "http://jaeger:4317",
+      "--service-name", "click-persister",
+      "--concurrent-processors", "8",
+      "--ack-wait-secs", "10"
+    ]
+    networks:
+      - app-network
+    depends_on:
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+      jaeger:
+        condition: service_started
+
 networks:
   app-network:
     driver: bridge
