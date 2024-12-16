@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use crate::model::TileVertex;
 
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CoordinatesData {
     // Vector of 3D positions (x,y,z triplets)

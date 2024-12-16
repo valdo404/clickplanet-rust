@@ -37,10 +37,19 @@ services:
   jaeger:
     image: jaegertracing/all-in-one:latest
     ports:
-      - "16686:16686"
-      - "4317:4317"
+      - "16686:16686"  # UI
+      - "14250:14250"  # Model
+      - "4317:4317"    # OTLP gRPC
+      - "4318:4318"    # OTLP HTTP
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
     networks:
       - app-network
+    healthcheck:
+      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:16686" ]
+      interval: 5s
+      timeout: 3s
+      retries: 3
 
   click-server:
     image: clickplanet/click-server:latest
@@ -49,7 +58,7 @@ services:
     command: [
       "--nats-url", "nats://nats:4222",
       "--redis-url", "redis://redis:6379",
-      "--otlp-endpoint", "http://jaeger:4317",
+      "--otlp-endpoint", "jaeger:4317",
       "--service-name", "click-server"
     ]
     ports:
@@ -71,7 +80,7 @@ services:
     command: [
       "--nats-url", "nats://nats:4222",
       "--redis-url", "redis://redis:6379",
-      "--otlp-endpoint", "http://jaeger:4317",
+      "--otlp-endpoint", "jaeger:4317",
       "--service-name", "click-persister",
       "--concurrent-processors", "8",
       "--ack-wait-secs", "10"

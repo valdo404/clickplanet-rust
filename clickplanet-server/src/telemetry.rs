@@ -23,9 +23,12 @@ pub async fn init_telemetry(config: TelemetryConfig) -> Result<(), Box<dyn std::
     let tracer_provider = opentelemetry_sdk::trace::TracerProvider::builder()
         .with_batch_exporter(
             opentelemetry_otlp::SpanExporter::builder()
-                .with_endpoint(config.otlp_endpoint)
-                .with_protocol(opentelemetry_otlp::Protocol::Grpc)
                 .with_tonic()
+                .with_export_config(opentelemetry_otlp::ExportConfig {
+                    endpoint: Some(config.otlp_endpoint),
+                    protocol: opentelemetry_otlp::Protocol::Grpc,
+                    ..Default::default()
+                })
                 .build()?,
             opentelemetry_sdk::runtime::Tokio,
         )
