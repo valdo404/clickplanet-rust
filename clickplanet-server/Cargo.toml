@@ -18,7 +18,7 @@ futures = "0.3.31"
 tracing = { version = "0.1.41" }
 deadpool-redis = { version = "0.13", features = ["rt_tokio_1"] }
 opentelemetry = { version = "0.27.1", features = ["trace"] }
-opentelemetry-otlp = { version = "0.27.0", features = ["trace", "grpc-tonic", "http-proto", "http-json"] }
+opentelemetry-otlp = { version = "0.27.0", features = ["trace", "grpc-tonic", "http-proto", "http-json", "tonic"] }
 tracing-opentelemetry = "0.28.0"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 opentelemetry_sdk = { version = "0.27.1", features = ["async-std", "rt-tokio"] }
@@ -30,6 +30,7 @@ papaya = "0.1.6"
 log = "0.4.22"
 url = "2.5.4"
 clap = { workspace = true, features = ["derive", "env"] }
+tower-http = { version="0.6.2", features = ["cors"]}
 
 [dev-dependencies]
 testcontainers = { version = "0.23.1" }
