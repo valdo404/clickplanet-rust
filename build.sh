@@ -26,8 +26,8 @@ VERSION="latest"
 echo "Building for platform: $PLATFORM"
 
 # Build each service
-services=("clickplanet-robot" "click-server" "state-click-persister")
-dockerfiles=("Dockerfile.robot" "Dockerfile.click-server" "Dockerfile.click-persister")
+services=("country-watchguard" "tile-syncer" "click-server" "state-click-persister" )
+dockerfiles=("Dockerfile.watchguard-robot" "Dockerfile.tile-syncer-robot" "Dockerfile.click-server" "Dockerfile.click-persister")
 
 for i in "${!services[@]}"; do
     SERVICE=${services[$i]}

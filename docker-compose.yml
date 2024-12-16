@@ -95,6 +95,24 @@ services:
       jaeger:
         condition: service_started
 
+  tile-syncer:
+    image: clickplanet/tile-syncer:latest
+    environment:
+      - RUST_LOG=debug
+    command: [
+      "--prod-host", "clickplanet.lol",
+      "--local-host", "click-server",  # Use the service name as host
+      "--local-port", "3000",
+      "--coordinates-file", "/app/coordinates.json"
+    ]
+    volumes:
+      - ./coordinates.json:/app/coordinates.json:ro
+    networks:
+      - app-network
+    depends_on:
+      click-server:
+        condition: service_started
+
 networks:
   app-network:
     driver: bridge
