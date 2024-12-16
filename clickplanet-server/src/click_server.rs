@@ -69,7 +69,7 @@ struct AppState<T: ClickRepository + Send + Sync> {
 }
 
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     #[arg(long, env = "NATS_URL", default_value = "nats://localhost:4222")]
@@ -83,38 +83,39 @@ struct Args {
 
     #[arg(long, env = "SERVICE_NAME", default_value = "clickplanet-server")]
     service_name: String,
+
+    #[arg(long, env = "PORT", default_value = "3000")]
+    port: u16,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    let telemetry_config = TelemetryConfig {
-        otlp_endpoint: args.otlp_endpoint,
-        service_name: args.service_name,
-    };
+    init_telemetry(TelemetryConfig {
+        otlp_endpoint: args.otlp_endpoint.clone(),
+        service_name: args.service_name.clone(),
+    }).await?;
 
-    init_telemetry(telemetry_config).await?;
-
-    run(&args.nats_url, &args.redis_url).await?;
+    run(&args).await?;
 
     Ok(())
 }
 
-async fn run(nats_url: &str, redis_url: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let (click_sender, _) = broadcast::channel(100000);
     let click_sender_ref = Arc::new(click_sender);
 
     let (update_notification_sender, _) = broadcast::channel(100000);
     let update_sender_ref: Arc<Sender<UpdateNotification>> = Arc::new(update_notification_sender);
 
-    let cold_repository: Arc<RedisClickRepository> = Arc::new(RedisClickRepository::new(redis_url).await?);
+    let cold_repository: Arc<RedisClickRepository> = Arc::new(RedisClickRepository::new(args.redis_url.as_str()).await?);
     let papaya_honey = PapayaClickRepository::populate_with(cold_repository).await?;
 
     let leaderboard_repo: Arc<dyn LeaderboardRepository> = Arc::new(LeaderboardOnClicks(papaya_honey.clone()));
     let click_repository: Arc<PapayaClickRepository> = Arc::new(papaya_honey.clone());
 
-    let jetstream = Arc::new(get_or_create_jet_stream(nats_url).await?);
+    let jetstream = Arc::new(get_or_create_jet_stream(args.nats_url.as_str()).await?);
 
     let update_service = Arc::new(OwnershipUpdateService::new(
         click_repository.clone(),
@@ -164,8 +165,8 @@ async fn run(nats_url: &str, redis_url: &str) -> Result<(), Box<dyn std::error::
         )
         .with_state(state);
 
-    let listener = TcpListener::bind("0.0.0.0:3000").await?;
-    println!("Server listening on 0.0.0.0:3000");
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", args.port)).await?;
+    println!("Server listening on 0.0.0.0:{}", args.port);
 
     let server: Serve<Router, Router> = axum::serve(listener, app);
     let update_service_clone = update_service.clone();

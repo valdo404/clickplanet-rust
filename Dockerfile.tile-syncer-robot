@@ -1,4 +1,3 @@
-# Build stage
 FROM rust:1.83-bookworm AS builder
 
 WORKDIR /usr/src/app
@@ -15,7 +14,7 @@ COPY clickplanet-robot/ ./clickplanet-robot/
 COPY clickplanet-server/ ./clickplanet-server/
 COPY clickplanet-proto/ ./clickplanet-proto/
 
-RUN cargo build --release --bin clickplanet-robot
+RUN cargo build --release --bin tile-syncer
 
 FROM debian:bookworm-slim
 
@@ -26,13 +25,9 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /usr/src/app/target/release/clickplanet-robot ./
+COPY --from=builder /usr/src/app/target/release/tile-syncer ./
 
-COPY countries.geojson \
-     tile_to_countries.json \
-     coordinates.json \
-     country_to_tiles.json \
-     ./
+COPY coordinates.json ./
 
-ENTRYPOINT ["./clickplanet-robot"]
-CMD ["--target-country", "ru", "--wanted-country", "ru", "--port", "3000", "--host", "localhost", "--unsecure"]
+ENTRYPOINT ["./tile-syncer"]
+CMD ["--prod-host", "clickplanet.lol", "--local-host", "localhost", "--local-port", "3000", "--coordinates-file", "coordinates.json"]
