@@ -721,8 +721,10 @@ dependencies = [
  "base64 0.21.7",
  "clickplanet-proto",
  "futures",
+ "futures-util",
  "prost",
  "rand 0.8.5",
+ "rayon",
  "reqwest",
  "serde",
  "serde_json",
@@ -3690,9 +3692,11 @@ dependencies = [
  "bitflags 2.6.0",
  "bytes",
  "http 1.2.0",
+ "http-body",
  "pin-project-lite",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]

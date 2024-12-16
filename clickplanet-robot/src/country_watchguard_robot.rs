@@ -3,14 +3,13 @@ mod geolookup;
 mod country_watchguard;
 mod model;
 
-use std::error::Error;
 use crate::coordinates::{read_coordinates_from_file, CoordinatesData, TileCoordinatesMap};
 use crate::country_watchguard::CountryWatchguard;
 use crate::geolookup::{CountryTilesMap, GeoLookup};
-use futures::StreamExt;
-use std::sync::Arc;
 use clap::Parser;
-use rustls::{ClientConfig, RootCertStore};
+use futures::StreamExt;
+use std::error::Error;
+use std::sync::Arc;
 
 use clickplanet_client::ClickPlanetRestClient;
 
@@ -54,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let geolookup: GeoLookup = GeoLookup::from_file(&args.geojson_file)?;
 
     let country_tile_map = CountryTilesMap::load_or_build(&geolookup, &index_coordinates)?;
-    let client = ClickPlanetRestClient::new(&args.host, args.port, !args.unsecure);
+    let client: ClickPlanetRestClient = ClickPlanetRestClient::new(&args.host, args.port, !args.unsecure);
 
     println!("Initializing watchguard for {} -> {}", args.target_country, args.wanted_country);
 

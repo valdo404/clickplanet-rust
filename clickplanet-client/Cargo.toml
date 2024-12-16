@@ -25,5 +25,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio-retry.workspace = true
+futures-util = "0.3.31"
+rayon = "1.10.0"
 
 # Additional dependencies specific to client
