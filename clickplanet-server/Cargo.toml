@@ -30,7 +30,7 @@ papaya = "0.1.6"
 log = "0.4.22"
 url = "2.5.4"
 clap = { workspace = true, features = ["derive", "env"] }
-tower-http = { version="0.6.2", features = ["cors"]}
+tower-http = { version="0.6.2", features = ["cors", "trace"]}
 
 [dev-dependencies]
 testcontainers = { version = "0.23.1" }

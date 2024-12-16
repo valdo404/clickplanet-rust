@@ -31,13 +31,14 @@ use futures_util::{SinkExt, StreamExt};
 use std::{time::Duration};
 use axum::extract::WebSocketUpgrade;
 use axum::http::header::CONTENT_TYPE;
-use axum::http::Method;
+use axum::http::{Method, Request};
 use axum::serve::Serve;
 use prost::Message;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::trace::TraceLayer;
 use clickplanet_proto::clicks::{Click, UpdateNotification};
 use clickplanet_proto::clicks::{LeaderboardResponse, LeaderboardEntry};
 
@@ -150,7 +151,16 @@ async fn run(nats_url: &str, redis_url: &str) -> Result<(), Box<dyn std::error::
                 .allow_origin(Any)
                 .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
                 .allow_headers([CONTENT_TYPE])
-                .allow_credentials(true)
+        )
+        .layer(TraceLayer::new_for_http()
+            .make_span_with(|request: &Request<_>| {
+                tracing::info_span!(
+                    "http-request",
+                    method = ?request.method(),
+                    uri = ?request.uri(),
+                    version = ?request.version(),
+                )
+            })
         )
         .with_state(state);
 
