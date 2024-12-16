@@ -54,11 +54,11 @@ services:
   click-server:
     image: clickplanet/click-server:latest
     environment:
-      - RUST_LOG=debug
+      - RUST_LOG=info
     command: [
       "--nats-url", "nats://nats:4222",
       "--redis-url", "redis://redis:6379",
-      "--otlp-endpoint", "jaeger:4317",
+      "--otlp-endpoint", "http://jaeger:4317",
       "--service-name", "click-server"
     ]
     ports:
@@ -76,11 +76,11 @@ services:
   state-click-persister:
     image: clickplanet/state-click-persister:latest
     environment:
-      - RUST_LOG=debug
+      - RUST_LOG=info
     command: [
       "--nats-url", "nats://nats:4222",
       "--redis-url", "redis://redis:6379",
-      "--otlp-endpoint", "jaeger:4317",
+      "--otlp-endpoint", "http://jaeger:4317",
       "--service-name", "click-persister",
       "--concurrent-processors", "8",
       "--ack-wait-secs", "10"
@@ -98,7 +98,7 @@ services:
   tile-syncer:
     image: clickplanet/tile-syncer:latest
     environment:
-      - RUST_LOG=debug
+      - RUST_LOG=info
     command: [
       "--prod-host", "clickplanet.lol",
       "--local-host", "click-server",  # Use the service name as host
