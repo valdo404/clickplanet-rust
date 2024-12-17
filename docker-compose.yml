@@ -13,6 +13,10 @@ services:
       - JS_STORE_DIR=/data/jetstream
     networks:
       - app-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8222/healthz"]
       interval: 5s
@@ -65,6 +69,14 @@ services:
       - "3000:3000"
     networks:
       - app-network
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: '2G'
+        reservations:
+          memory: '2G'
+          cpus: '4.0'
     depends_on:
       redis:
         condition: service_healthy

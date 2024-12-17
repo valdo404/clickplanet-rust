@@ -49,7 +49,7 @@ pub async fn init_telemetry(config: TelemetryConfig) -> Result<(), Box<dyn std::
 
     // Set up filter based on RUST_LOG env var, defaulting to info
     let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("debug"));
+        .unwrap_or_else(|_| EnvFilter::new("info"));
 
     // Combine both layers
     let subscriber = Registry::default()
