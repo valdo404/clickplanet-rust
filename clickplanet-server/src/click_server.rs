@@ -17,6 +17,14 @@ use axum::{
     routing::get,
     Router,
 };
+use axum::extract::WebSocketUpgrade;
+use axum::http::header::CONTENT_TYPE;
+use axum::http::{Method, Request};
+use axum::serve::Serve;
+use http_body_util::Full;
+use axum::body::{to_bytes, Body};
+use axum::http::header::ACCEPT;
+use axum::response::Response;
 
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
@@ -29,10 +37,7 @@ use base64::{encode};
 use clap::Parser;
 use futures_util::{SinkExt, StreamExt};
 use std::{time::Duration};
-use axum::extract::WebSocketUpgrade;
-use axum::http::header::CONTENT_TYPE;
-use axum::http::{Method, Request};
-use axum::serve::Serve;
+
 use prost::Message;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
@@ -41,6 +46,8 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use clickplanet_proto::clicks::{Click, UpdateNotification};
 use clickplanet_proto::clicks::{LeaderboardResponse, LeaderboardEntry};
+use bytes::BytesMut;
+
 
 use crate::click_persistence::{ClickRepository, LeaderboardRepository, LeaderboardOnClicks, LeaderboardMaintainer};
 use crate::in_memory_click_persistence::{PapayaClickRepository};
@@ -48,6 +55,14 @@ use crate::nats_commons::ConsumerConfig;
 use crate::ownership_service::OwnershipUpdateService;
 use crate::redis_click_persistence::{RedisClickRepository};
 use crate::telemetry::{init_telemetry, TelemetryConfig};
+
+
+
+#[derive(Debug)]
+enum AcceptedFormat {
+    Protobuf,
+    Json,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ClickPayload {
@@ -140,12 +155,12 @@ async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/api/click", post(handle_click))
-        .route("/v2/rpc/click", post(handle_click))
         .route("/api/ownerships-by-batch", post(handle_get_ownerships_by_batch))
+        .route("/ws/listen", get(handle_ws_upgrade))
+        .route("/v2/rpc/click", post(handle_click))
         .route("/v2/rpc/ownerships-by-batch", post(handle_get_ownerships_by_batch))
         .route("/v2/rpc/ownerships", get(handle_get_ownerships))
         .route("/v2/rpc/leaderboard", get(handle_get_leaderboard))
-        .route("/ws/listen", get(handle_ws_upgrade))
         .route("/v2/ws/listen", get(handle_ws_upgrade))
         .layer(
             CorsLayer::new()
@@ -345,7 +360,15 @@ async fn handle_ws_connection<T: ClickRepository>(socket: WebSocket, state: AppS
 
 async fn handle_get_leaderboard<T: ClickRepository>(
     State(state): State<AppState<T>>,
-) -> Result<Json<Value>, StatusCode> {
+    headers: axum::http::HeaderMap,
+) -> Result<Response<Full<Bytes>>, StatusCode> {
+    let format = match headers.get(ACCEPT) {
+        Some(accept) if accept.to_str().map(|s| s.contains("application/protobuf")).unwrap_or(false) => {
+            AcceptedFormat::Protobuf
+        },
+        _ => AcceptedFormat::Json
+    };
+
     let leaderboard_data = tokio::time::timeout(
         Duration::from_secs(5),
         state.leaderboard_repo.leaderboard(),
@@ -376,16 +399,31 @@ async fn handle_get_leaderboard<T: ClickRepository>(
     entries.sort_by(|a, b| b.score.cmp(&a.score));
     response.entries = entries;
 
-    let mut response_bytes = Vec::new();
-    response
-        .encode(&mut response_bytes)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    match format {
+        AcceptedFormat::Protobuf => {
+            let mut buf = BytesMut::new();
+            response.encode(&mut buf)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let base64_data = encode(&response_bytes);
+            Ok(Response::builder()
+                .header("Content-Type", "application/protobuf")
+                .body(Full::new(buf.freeze()))
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?)
+        },
+        AcceptedFormat::Json => {
+            let json_response = json!({
+                "entries": response.entries.iter().map(|entry| {
+                    json!({
+                        "country_id": entry.country_id,
+                        "score": entry.score,
+                    })
+                }).collect::<Vec<_>>()
+            });
 
-    let payload = json!({
-        "data": base64_data,
-    });
-
-    Ok(axum::Json(payload))
+            Ok(Response::builder()
+                .header("Content-Type", "application/json")
+                .body(Full::new(Bytes::from(json_response.to_string())))
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?)
+        }
+    }
 }

@@ -13,6 +13,10 @@ services:
       - JS_STORE_DIR=/data/jetstream
     networks:
       - app-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8222/healthz"]
       interval: 5s
@@ -54,17 +58,25 @@ services:
   click-server:
     image: clickplanet/click-server:latest
     environment:
-      - RUST_LOG=debug
+      - RUST_LOG=info
     command: [
       "--nats-url", "nats://nats:4222",
       "--redis-url", "redis://redis:6379",
-      "--otlp-endpoint", "jaeger:4317",
+      "--otlp-endpoint", "http://jaeger:4317",
       "--service-name", "click-server"
     ]
     ports:
       - "3000:3000"
     networks:
       - app-network
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: '2G'
+        reservations:
+          memory: '2G'
+          cpus: '4.0'
     depends_on:
       redis:
         condition: service_healthy
@@ -76,11 +88,11 @@ services:
   state-click-persister:
     image: clickplanet/state-click-persister:latest
     environment:
-      - RUST_LOG=debug
+      - RUST_LOG=info
     command: [
       "--nats-url", "nats://nats:4222",
       "--redis-url", "redis://redis:6379",
-      "--otlp-endpoint", "jaeger:4317",
+      "--otlp-endpoint", "http://jaeger:4317",
       "--service-name", "click-persister",
       "--concurrent-processors", "8",
       "--ack-wait-secs", "10"
@@ -98,7 +110,7 @@ services:
   tile-syncer:
     image: clickplanet/tile-syncer:latest
     environment:
-      - RUST_LOG=debug
+      - RUST_LOG=info
     command: [
       "--prod-host", "clickplanet.lol",
       "--local-host", "click-server",  # Use the service name as host
