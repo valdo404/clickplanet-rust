@@ -2,14 +2,14 @@ use wasm_bindgen::prelude::*;
 use web_sys::{Document, Element};
 
 #[wasm_bindgen]
-pub struct MessageDisplay {
+pub struct SimpleListDisplay {
     output_div: Element,
 }
 
 #[wasm_bindgen]
-impl MessageDisplay {
+impl SimpleListDisplay {
     #[wasm_bindgen(constructor)]
-    pub fn new(document: &Document) -> Result<MessageDisplay, JsValue> {
+    pub fn new(document: &Document) -> Result<SimpleListDisplay, JsValue> {
         let output_div = match document.get_element_by_id("output") {
             Some(div) => div,
             None => {
@@ -22,7 +22,7 @@ impl MessageDisplay {
             }
         };
 
-        Ok(MessageDisplay { output_div })
+        Ok(SimpleListDisplay { output_div })
     }
 
     #[wasm_bindgen]

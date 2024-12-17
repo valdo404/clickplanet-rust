@@ -1,7 +1,8 @@
 mod websocket;
-mod simple_display;
+mod simple_list_display;
+mod protobuf;
 
-pub use simple_display::MessageDisplay;
+pub use simple_list_display::SimpleListDisplay;
 use js_sys::Function;
 use std::cell::RefCell;
 use wasm_bindgen::prelude::*;
@@ -9,7 +10,7 @@ use web_sys::window;
 pub use websocket::ClickplanetWebsocketClient;
 
 thread_local! {
-    static DISPLAY: RefCell<Option<MessageDisplay>> = RefCell::new(None);
+    static DISPLAY: RefCell<Option<SimpleListDisplay >> = RefCell::new(None);
 }
 
 #[wasm_bindgen(start)]
@@ -17,7 +18,7 @@ pub fn main() -> Result<(), JsValue> {
     let window = window().expect("no global window exists");
     let document = window.document().expect("no document on window");
 
-    let display = MessageDisplay::new(&document)?;
+    let display = SimpleListDisplay::new(&document)?;
     DISPLAY.with(|d| {
         *d.borrow_mut() = Some(display);
     });
