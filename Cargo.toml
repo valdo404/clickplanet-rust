@@ -2,10 +2,10 @@
 members = [
     "clickplanet-client",
     "clickplanet-server",
+    "clickplanet-browser",
     "clickplanet-proto",
     "clickplanet-robot"
 ]
-
 
 [workspace.dependencies]
 prost = "0.13.4"

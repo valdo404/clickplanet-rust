@@ -715,6 +715,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f46ad14479a25103f283c0f10005961cf086d8dc42205bb44c46ac563475dca6"
 
 [[package]]
+name = "clickplanet-browser"
+version = "0.1.0"
+dependencies = [
+ "clickplanet-proto",
+ "js-sys",
+ "prost",
+ "prost-build",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "clickplanet-client"
 version = "0.1.0"
 dependencies = [
@@ -740,7 +753,6 @@ version = "0.1.0"
 dependencies = [
  "prost",
  "prost-build",
- "tonic",
 ]
 
 [[package]]
