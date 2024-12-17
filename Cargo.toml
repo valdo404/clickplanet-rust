@@ -2,7 +2,7 @@
 members = [
     "clickplanet-client",
     "clickplanet-server",
-    "clickplanet-browser",
+    "clickplanet-webapp",
     "clickplanet-proto",
     "clickplanet-robot"
 ]
