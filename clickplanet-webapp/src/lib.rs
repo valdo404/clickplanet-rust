@@ -1,50 +1,42 @@
-mod websocket;
 mod simple_list_display;
-mod protobuf;
-
-pub use simple_list_display::SimpleListDisplay;
-use js_sys::Function;
-use std::cell::RefCell;
-use wasm_bindgen::prelude::*;
-use web_sys::window;
-pub use websocket::ClickplanetWebsocketClient;
-
-thread_local! {
-    static DISPLAY: RefCell<Option<SimpleListDisplay >> = RefCell::new(None);
+mod websocket;
+mod app {
+    mod countries;
 }
+
+mod backends {
+    mod backend;
+    mod fake_backend;
+}
+
+use wasm_bindgen::prelude::*;
+use js_sys::Function;
+use crate::simple_list_display::DomDisplay;
+use crate::websocket::WebSocketWrapper;
 
 #[wasm_bindgen(start)]
 pub fn main() -> Result<(), JsValue> {
-    let window = window().expect("no global window exists");
-    let document = window.document().expect("no document on window");
+    let display = DomDisplay::new()?;
 
-    let display = SimpleListDisplay::new(&document)?;
-    DISPLAY.with(|d| {
-        *d.borrow_mut() = Some(display);
-    });
+    // Create the WebSocket
+    let protocol = "wss";
+    let hostname = "clickplanet.lol";
+    let port = 443;
+    let ws_url = format!("{}://{}:{}/v2/ws/listen", protocol, hostname, port);
 
+    let ws = WebSocketWrapper::new(&ws_url)?;
+
+    // Create message handler
+    let display_ref = display.clone();
     let callback = Closure::wrap(Box::new(move |message: String| {
-        DISPLAY.with(|display| {
-            if let Some(display) = display.borrow().as_ref() {
-                if let Err(e) = display.add_message(&message) {
-                    web_sys::console::error_1(&format!("Error displaying message: {:?}", e).into());
-                }
-            }
-        });
+        if let Err(e) = display_ref.add_message(&message) {
+            web_sys::console::error_1(&format!("Error displaying message: {:?}", e).into());
+        }
     }) as Box<dyn FnMut(String)>);
 
-    let message_fn = callback.as_ref().unchecked_ref::<Function>().clone();
+    ws.set_message_handler(&callback.as_ref().unchecked_ref())?;
 
-
-    let client = ClickplanetWebsocketClient::new(
-        true,                    // secure (wss://)
-        "clickplanet.lol",       // hostname
-        443,                     // port
-        message_fn,
-    )?;
-
-    std::mem::forget(client);
-    std::mem::forget(callback);
+    callback.forget();
 
     Ok(())
 }

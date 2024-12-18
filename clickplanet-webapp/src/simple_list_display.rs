@@ -1,15 +1,17 @@
 use wasm_bindgen::prelude::*;
-use web_sys::{Document, Element};
+use web_sys::Element;
 
 #[wasm_bindgen]
-pub struct SimpleListDisplay {
-    output_div: Element,
-}
+#[derive(Clone)]
+pub struct DomDisplay(Element);
 
 #[wasm_bindgen]
-impl SimpleListDisplay {
+impl DomDisplay {
     #[wasm_bindgen(constructor)]
-    pub fn new(document: &Document) -> Result<SimpleListDisplay, JsValue> {
+    pub fn new() -> Result<DomDisplay, JsValue> {
+        let window = web_sys::window().unwrap();
+        let document = window.document().unwrap();
+
         let output_div = match document.get_element_by_id("output") {
             Some(div) => div,
             None => {
@@ -22,18 +24,18 @@ impl SimpleListDisplay {
             }
         };
 
-        Ok(SimpleListDisplay { output_div })
+        Ok(DomDisplay(output_div))
     }
 
     #[wasm_bindgen]
     pub fn add_message(&self, message: &str) -> Result<(), JsValue> {
-        let document = self.output_div
+        let document = self.0
             .owner_document()
             .ok_or_else(|| JsValue::from_str("No owner document"))?;
 
         let msg_p = document.create_element("p")?;
         msg_p.set_text_content(Some(message));
-        self.output_div.append_child(&msg_p)?;
+        self.0.append_child(&msg_p)?;
 
         Ok(())
     }
