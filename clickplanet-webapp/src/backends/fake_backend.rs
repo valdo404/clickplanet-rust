@@ -51,7 +51,6 @@ impl FakeBackend {
             });
         }
 
-        // Simulate periodic updates for countries
         for country_code in countries {
             let backend_ref = Arc::clone(&backend);
             thread::spawn(move || {
