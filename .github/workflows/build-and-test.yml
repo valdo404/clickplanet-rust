@@ -19,7 +19,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # Step 2. Install Rust (via rustup)
+      # Step 2. Install Protocol Buffers Compiler (protoc)
+      - name: Install Protobuf Compiler (protoc)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version # Print protoc version to confirm installation
+
+      # Step 3. Install Rust (via rustup)
       - name: Setup Rust
         uses: actions-rs/toolchain@v1
         with:
@@ -27,17 +34,17 @@ jobs:
           components: rustfmt, clippy # Install supplementary tools
           override: true
 
-      # Step 3. Install Cargo Dependencies
+      # Step 4. Install Cargo Dependencies
       - name: Install dependencies
         run: |
           cargo fetch
 
-      # Step 4. Build the Project
+      # Step 5. Build the Project
       - name: Build the project
         run: |
           cargo build --verbose --workspace
 
-      # Step 5. Run Tests
+      # Step 6. Run Tests
       - name: Run tests
         run: |
           cargo test --verbose --workspace
