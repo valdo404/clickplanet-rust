@@ -2,10 +2,10 @@ use dioxus::prelude::*;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct BlockButtonProps {
-    on_click: Callback<MouseEvent, ()>,
-    text: String,                 // Text to display on the button
-    image_url: String,    // Optional image URL (not used in the current implementation)
-    class_name: Option<String>,   // Optional class name for styling
+    pub on_click: Callback<MouseEvent, ()>,
+    pub text: String,                 // Text to display on the button
+    pub image_url: String,    // Optional image URL (not used in the current implementation)
+    pub class_name: Option<String>,   // Optional class name for styling
 }
 
 #[component]

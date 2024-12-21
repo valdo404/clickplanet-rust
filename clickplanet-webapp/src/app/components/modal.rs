@@ -1,11 +1,11 @@
 use dioxus::prelude::*;
-
+use crate::CloseButton;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct ModalProps {
     #[props(optional)]
     pub title: Option<String>,             // Optional title for the modal
-    pub children: Element,                // Modal content
+    pub children: Element,                // modal content
     pub on_close: Callback<()>,           // Callback for when the modal is closed
     #[props(optional)]
     pub close_button_text: Option<String>, // Optional text for the close button

@@ -9,6 +9,8 @@ mod app {
         pub mod block_button;
         pub mod close_button;
         pub mod discord_button;
+        pub mod modal;
+        pub mod modal_manager;
     }
 }
 
