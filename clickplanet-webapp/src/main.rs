@@ -11,6 +11,7 @@ mod app {
         pub mod discord_button;
         pub mod modal;
         pub mod modal_manager;
+        pub mod on_load_modal;
     }
 }
 
