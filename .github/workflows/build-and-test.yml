@@ -1,0 +1,82 @@
+name: CI/CD Workflow
+
+on:
+  push:
+    branches:
+      - main
+      - feat-*
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1. Checkout the Repository
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Step 2. Install Rust (via rustup)
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy # Install supplementary tools
+          override: true
+
+      # Step 3. Install Cargo Dependencies
+      - name: Install dependencies
+        run: |
+          cargo fetch
+
+      # Step 4. Build the Project
+      - name: Build the project
+        run: |
+          cargo build --verbose --workspace
+
+      # Step 5. Run Tests
+      - name: Run tests
+        run: |
+          cargo test --verbose --workspace
+
+      # Step 6. Run Build for Dioxus Web App (if applicable)
+#      - name: Build Dioxus frontend (WebAssembly)
+#        if: exists('./clickplanet-webapp/Dioxus.toml')
+#        run: |
+#          cd clickplanet-webapp
+#          dioxus build --release
+
+      # Step 7. Lint and Format (Optional)
+#      - name: Run Clippy (Lint)
+#        run: |
+#          cargo clippy --workspace --all-targets --all-features -- -D warnings
+#      - name: Check formatting
+#        run: |
+#          cargo fmt --all -- --check
+
+  docker:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1. Checkout the Repository
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Step 2. Build Docker Images
+#      - name: Build Docker Images
+#        run: |
+#          docker-compose -f docker-compose.yml build
+
+      # Step 3. Push Docker Images (Optional, only for main branch)
+#      - name: Push Docker Images
+#        if: github.ref == 'refs/heads/main'
+#        env:
+#          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+#          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+#        run: |
+#          echo "$DOCKER_PASSWORD" | docker login --username "$DOCKER_USERNAME" --password-stdin
+#          docker-compose -f docker-compose.yml push
