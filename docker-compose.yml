@@ -52,6 +52,9 @@ services:
       retries: 3
 
   click-server:
+    build:
+      context: ./
+      dockerfile: Dockerfile.click-server
     image: clickplanet/click-server:latest
     environment:
       - RUST_LOG=debug
@@ -74,6 +77,9 @@ services:
         condition: service_started
 
   state-click-persister:
+    build:
+      context: ./
+      dockerfile: Dockerfile.click-persister
     image: clickplanet/state-click-persister:latest
     environment:
       - RUST_LOG=debug
@@ -96,6 +102,9 @@ services:
         condition: service_started
 
   tile-syncer:
+    build:
+      context: ./
+      dockerfile: Dockerfile.tile-syncer-robot
     image: clickplanet/tile-syncer:latest
     environment:
       - RUST_LOG=debug
