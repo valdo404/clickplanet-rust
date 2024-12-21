@@ -57,3 +57,52 @@ pub fn BlockButton(props: BlockButtonProps) -> Element {
             "{props.text}"
         })
 }
+
+#[derive(Props, Clone, PartialEq)]
+pub struct CloseButtonProps {
+    pub on_click: Callback<MouseEvent, ()>,
+    #[props(optional)]
+    pub class_name: Option<String>,
+    #[props(optional)]
+    pub text: Option<String>,
+}
+#[component]
+pub fn CloseButton(props: CloseButtonProps) -> Element {
+    let class_name = match &props.class_name {
+        Some(class) => format!("button button-close {}", class),
+        None => "button button-close".to_string(),
+    };
+
+    rsx!(
+        button {
+            class: "{class_name}",
+            onclick: move |evt| props.on_click.call(evt),
+            "{props.text.clone().unwrap_or_else(|| String::from(\"Close\"))}"
+        }
+    )
+}
+
+#[derive(Props, Clone, PartialEq)]
+pub struct DiscordButtonProps {
+    #[props(optional)]
+    pub message: Option<String>, // Optional message to display, defaults to "Join us on Discord"
+}
+
+#[component]
+pub fn DiscordButton(props: DiscordButtonProps) -> Element {
+    let message = props
+        .message
+        .clone()
+        .unwrap_or_else(|| "Join us on Discord".to_string());
+
+    rsx!(
+        a {
+            href: "https://discord.gg/Nwekj6ndbn",
+            target: "_blank",
+            rel: "noopener noreferrer",
+            class: "button button-discord",
+            aria_label: "{message}",
+            "{message}"
+        }
+    )
+}
