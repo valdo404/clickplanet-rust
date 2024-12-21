@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y \
     libssl3 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
+LABEL org.opencontainers.image.source https://github.com/valdo404/clickplanet-rust
 COPY --from=builder /usr/src/app/target/release/state-click-persister ./
 
 COPY countries.geojson \

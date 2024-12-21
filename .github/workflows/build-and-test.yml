@@ -69,21 +69,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1. Checkout the Repository
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # Step 2. Build Docker Images
-#      - name: Build Docker Images
-#        run: |
-#          docker-compose -f docker-compose.yml build
+      - name: Build Docker Images
+        run: |
+          docker compose -f docker-compose.yml build
 
-      # Step 3. Push Docker Images (Optional, only for main branch)
-#      - name: Push Docker Images
-#        if: github.ref == 'refs/heads/main'
-#        env:
-#          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-#          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-#        run: |
-#          echo "$DOCKER_PASSWORD" | docker login --username "$DOCKER_USERNAME" --password-stdin
-#          docker-compose -f docker-compose.yml push
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+
+      - name: Build and push Docker images
+        run: |
+          docker compose -f docker-compose.yml push

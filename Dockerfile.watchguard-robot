@@ -28,6 +28,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /usr/src/app/target/release/country-watchguard ./
+LABEL org.opencontainers.image.source https://github.com/valdo404/clickplanet-rust
 
 COPY countries.geojson \
      tile_to_countries.json \

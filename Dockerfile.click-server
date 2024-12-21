@@ -21,6 +21,7 @@ RUN cargo build --release --bin click-server
 FROM debian:bookworm-slim
 
 WORKDIR /app
+LABEL org.opencontainers.image.source https://github.com/valdo404/clickplanet-rust
 
 RUN apt-get update && apt-get install -y \
     libssl3 \

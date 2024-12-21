@@ -55,7 +55,7 @@ services:
     build:
       context: ./
       dockerfile: Dockerfile.click-server
-    image: clickplanet/click-server:latest
+    image: ghcr.io/valdo404/clickplanet-rust-state-click-server:latest
     environment:
       - RUST_LOG=debug
     command: [
@@ -80,7 +80,7 @@ services:
     build:
       context: ./
       dockerfile: Dockerfile.click-persister
-    image: clickplanet/state-click-persister:latest
+    image: ghcr.io/valdo404/clickplanet-rust-state-click-persister:latest
     environment:
       - RUST_LOG=debug
     command: [
@@ -105,7 +105,7 @@ services:
     build:
       context: ./
       dockerfile: Dockerfile.tile-syncer-robot
-    image: clickplanet/tile-syncer:latest
+    image: ghcr.io/valdo404/clickplanet-rust-tile-syncer:latest
     environment:
       - RUST_LOG=debug
     command: [
