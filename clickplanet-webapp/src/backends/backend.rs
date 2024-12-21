@@ -55,7 +55,7 @@ pub trait UpdatesListener {
     fn listen_for_updates(&self, callback: Box<dyn Fn(Update) + Send + Sync>) -> ();
 
     fn listen_for_updates_batch(
-        &self,
+        &mut self,
         callback: Box<dyn Fn(Vec<Update>) + Send + Sync>,
     ) -> ();
 }

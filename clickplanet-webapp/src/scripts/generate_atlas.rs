@@ -1,9 +1,9 @@
+use anyhow::{Context, Result};
+use image::{DynamicImage, RgbaImage};
+use serde_json::{json, Value};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use anyhow::{Context, Result};
-use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
-use serde_json::{json, Value};
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();

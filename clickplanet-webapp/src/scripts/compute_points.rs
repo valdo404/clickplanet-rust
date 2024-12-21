@@ -1,9 +1,8 @@
-use std::env;
-use std::fs;
-use std::process;
-use image::{GenericImageView, Rgba, ImageBuffer, RgbImage};
 use glam::Vec3;
-use serde::{Serialize, Deserialize};
+use image::GenericImageView;
+use serde::{Deserialize, Serialize};
+use std::env;
+use std::process;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Coordinates {
@@ -56,7 +55,7 @@ fn load_map(file_path: &str) -> (Vec<u8>, u32, u32) {
     (rgb_pixels, width, height)
 }
 
-fn generate_base_coordinates(detail: u32) -> Coordinates {
+fn generate_base_coordinates(_detail: u32) -> Coordinates {
     // Simplified Icosahedron generation
     let golden_ratio = (1.0 + 5.0_f32.sqrt()) / 2.0;
 

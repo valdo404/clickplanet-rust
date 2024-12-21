@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,7 +17,7 @@ pub struct CountriesMap {
 impl CountriesMap {
     #[wasm_bindgen(constructor)]
     pub fn new(data: JsValue) -> CountriesMap {
-        let countries_data: HashMap<String, String> = data.into_serde()
+        let countries_data: HashMap<String, String> = serde_wasm_bindgen::from_value(data)
             .map_err(|e| js_sys::Error::new(&e.to_string()))
             .unwrap_throw();
 
@@ -36,7 +36,7 @@ impl CountriesMap {
 
     pub fn get(&self, code: &str) -> JsValue {
         match self.countries.get(code) {
-            Some(country) => JsValue::from_serde(country).unwrap(),
+            Some(country) => serde_wasm_bindgen::to_value(country).unwrap(),
             None => JsValue::null(),
         }
     }

@@ -28,5 +28,15 @@ anyhow = "1.0"
 image = "0.24"
 serde_json = "1.0"
 glam = "0.29.2"
-rand = "0.9.0-beta.1"
 uuid = { version = "1.11.0", features = ["v4"] }
+
+getrandom = { version = "0.2.15", features = ["js"] }
+rand = "0.8.5"
+base64 = "0.22.1"
+reqwest = { version = "0.12.9", features = ["json"] }
+async-trait = "0.1.83"
+futures-util = "0.3.31"
+dioxus = { version = "0.6.1", features = ["web"] }
+dioxus-hooks = "0.6.1"
+console_log = "1.0.0"
+log = "0.4.22"

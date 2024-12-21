@@ -88,7 +88,7 @@ impl FakeBackend {
 }
 
 impl TileClicker for FakeBackend {
-    fn click_tile(&mut self, tile_id: u32, country_id: String) -> () {
+    fn click_tile(&mut self, _tile_id: u32, _country_id: String) -> () {
         unimplemented!()
     }
 }
@@ -111,7 +111,7 @@ impl UpdatesListener for FakeBackend {
     }
 
     fn listen_for_updates_batch(
-        &self,
+        &mut self,
         callback: Box<dyn Fn(Vec<Update>) + Send + Sync>,
     ) -> () {
         let id = Uuid::new_v4().to_string();

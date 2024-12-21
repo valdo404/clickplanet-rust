@@ -1,5 +1,6 @@
 mod simple_list_display;
 mod websocket;
+
 mod app {
     mod countries;
 }
@@ -7,10 +8,10 @@ mod app {
 mod backends {
     mod backend;
     mod fake_backend;
+    mod http_backend;
 }
 
 use wasm_bindgen::prelude::*;
-use js_sys::Function;
 use crate::simple_list_display::DomDisplay;
 use crate::websocket::WebSocketWrapper;
 
