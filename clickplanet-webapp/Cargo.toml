@@ -33,6 +33,8 @@ uuid = { version = "1.11.0", features = ["v4"] }
 getrandom = { version = "0.2.15", features = ["js"] }
 rand = "0.8.5"
 base64 = "0.22.1"
+tokio-tungstenite = "0.26.1"
+tokio = "1.42.0"
 reqwest = { version = "0.12.9", features = ["json"] }
 async-trait = "0.1.83"
 futures-util = "0.3.31"
