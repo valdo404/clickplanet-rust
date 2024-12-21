@@ -1,0 +1,17 @@
+[package]
+name = "clickplanet-osm-extractor"
+version = "0.1.0"
+edition = "2021"
+description = "OSM Extractor implementation for ClickPlanet game"
+license = "MIT"
+
+[dependencies]
+clickplanet-proto = { path = "../clickplanet-proto" }
+postgres = "0.19.9"
+osmpbf = "0.3"
+serde_json = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
+
+[[bin]]
+name = "osm-extractor"
+path = "src/osm_extractor.rs"

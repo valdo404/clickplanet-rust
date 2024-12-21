@@ -4,7 +4,8 @@ members = [
     "clickplanet-server",
     "clickplanet-webapp",
     "clickplanet-proto",
-    "clickplanet-robot"
+    "clickplanet-robot",
+    "clickplanet-osm-extractor"
 ]
 resolver = "1"
 
@@ -12,7 +13,7 @@ resolver = "1"
 prost = "0.13.4"
 tonic = "0.12.3"
 tokio = { version = "1.42.0", features = ["full"] }
-tokio-tungstenite = { version = "0.24.0", features = ["__rustls-tls", "rustls-tls-native-roots","connect"] }
+tokio-tungstenite = { version = "0.24.0", features = ["__rustls-tls", "rustls-tls-native-roots", "connect"] }
 futures = "0.3.31"
 url = "2.5.4"
 native-tls = "0.2"
