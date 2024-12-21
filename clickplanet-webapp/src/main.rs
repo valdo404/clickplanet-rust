@@ -12,6 +12,7 @@ mod app {
         pub mod modal;
         pub mod modal_manager;
         pub mod on_load_modal;
+        pub mod select_with_search;
     }
 }
 
