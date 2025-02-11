@@ -52,7 +52,10 @@ services:
       retries: 3
 
   click-server:
-    image: clickplanet/click-server:latest
+    build:
+      context: ./
+      dockerfile: Dockerfile.click-server
+    image: ghcr.io/valdo404/clickplanet-rust-state-click-server:latest
     environment:
       - RUST_LOG=debug
     command: [
@@ -74,7 +77,10 @@ services:
         condition: service_started
 
   state-click-persister:
-    image: clickplanet/state-click-persister:latest
+    build:
+      context: ./
+      dockerfile: Dockerfile.click-persister
+    image: ghcr.io/valdo404/clickplanet-rust-state-click-persister:latest
     environment:
       - RUST_LOG=debug
     command: [
@@ -96,7 +102,10 @@ services:
         condition: service_started
 
   tile-syncer:
-    image: clickplanet/tile-syncer:latest
+    build:
+      context: ./
+      dockerfile: Dockerfile.tile-syncer-robot
+    image: ghcr.io/valdo404/clickplanet-rust-tile-syncer:latest
     environment:
       - RUST_LOG=debug
     command: [

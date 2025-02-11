@@ -14,6 +14,7 @@ COPY clickplanet-client/ ./clickplanet-client/
 COPY clickplanet-robot/ ./clickplanet-robot/
 COPY clickplanet-server/ ./clickplanet-server/
 COPY clickplanet-proto/ ./clickplanet-proto/
+COPY clickplanet-webapp/ ./clickplanet-webapp/
 
 RUN cargo build --release --bin state-click-persister
 
@@ -25,7 +26,7 @@ RUN apt-get update && apt-get install -y \
     libssl3 \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
+LABEL org.opencontainers.image.source https://github.com/valdo404/clickplanet-rust
 COPY --from=builder /usr/src/app/target/release/state-click-persister ./
 
 COPY countries.geojson \

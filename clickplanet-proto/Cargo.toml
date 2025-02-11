@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 prost.workspace = true
-tonic.workspace = true
 
 [build-dependencies]
 prost-build = "0.13.4"

@@ -130,6 +130,7 @@ impl CoordinatesData {
 
 #[cfg(test)]
 mod tests {
+    use clickplanet_client::TileCount;
     use super::*;
 
     #[test]

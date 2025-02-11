@@ -2,16 +2,18 @@
 members = [
     "clickplanet-client",
     "clickplanet-server",
+    "clickplanet-webapp",
     "clickplanet-proto",
-    "clickplanet-robot"
+    "clickplanet-robot",
+    "clickplanet-osm-extractor"
 ]
-
+resolver = "1"
 
 [workspace.dependencies]
 prost = "0.13.4"
 tonic = "0.12.3"
 tokio = { version = "1.42.0", features = ["full"] }
-tokio-tungstenite = { version = "0.24.0", features = ["__rustls-tls", "rustls-tls-native-roots","connect"] }
+tokio-tungstenite = { version = "0.24.0", features = ["__rustls-tls", "rustls-tls-native-roots", "connect"] }
 futures = "0.3.31"
 url = "2.5.4"
 native-tls = "0.2"
@@ -28,3 +30,18 @@ rayon = "1.10.0"
 clap = { version = "4.5.23", features = ["derive", "env"] }
 tokio-retry = "0.3.0"
 thiserror = "2.0.6"
+getrandom = { version = "0.2.15", features = ["js"] }
+
+[patch.crates-io]
+
+[profile]
+
+[profile.wasm-dev]
+inherits = "dev"
+opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"

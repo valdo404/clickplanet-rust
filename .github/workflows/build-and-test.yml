@@ -1,0 +1,94 @@
+name: CI/CD Workflow
+
+on:
+  push:
+    branches:
+      - main
+      - feat-*
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1. Checkout the Repository
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Step 2. Install Protocol Buffers Compiler (protoc)
+      - name: Install Protobuf Compiler (protoc)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version # Print protoc version to confirm installation
+
+      # Step 3. Install Rust (via rustup)
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy # Install supplementary tools
+          override: true
+
+      # Step 4. Install Cargo Dependencies
+      - name: Install dependencies
+        run: |
+          cargo fetch
+
+      # Step 5. Build the Project
+      - name: Build the project
+        run: |
+          cargo build --verbose --workspace
+
+      # Step 6. Run Tests
+      - name: Run tests
+        run: |
+          cargo test --verbose --workspace
+
+      # Step 6. Run Build for Dioxus Web App (if applicable)
+#      - name: Build Dioxus frontend (WebAssembly)
+#        if: exists('./clickplanet-webapp/Dioxus.toml')
+#        run: |
+#          cd clickplanet-webapp
+#          dioxus build --release
+
+      # Step 7. Lint and Format (Optional)
+#      - name: Run Clippy (Lint)
+#        run: |
+#          cargo clippy --workspace --all-targets --all-features -- -D warnings
+#      - name: Check formatting
+#        run: |
+#          cargo fmt --all -- --check
+
+  docker:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Build Docker Images
+        run: |
+          docker compose -f docker-compose.yml build
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.PAT }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+
+      - name: Build and push Docker images
+        run: |
+          docker compose -f docker-compose.yml push
